@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      all-pub-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pub"
+    directory: "/rust_builder"
+    schedule:
+      interval: "weekly"
+    groups:
+      all-pub-builder-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "weekly"
+    groups:
+      all-cargo-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      all-actions:
+        patterns:
+          - "*"
