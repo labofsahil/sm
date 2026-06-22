@@ -6,8 +6,10 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async => await RustLib.init());
-  testWidgets('Can call rust function', (WidgetTester tester) async {
-    await tester.pumpWidget(const MyApp());
-    expect(find.textContaining('Result: `Hello, Tom!`'), findsOneWidget);
+  testWidgets('Can load Sendme Dashboard', (WidgetTester tester) async {
+    await tester.pumpWidget(const SendmeApp());
+    await tester.pumpAndSettle();
+    expect(find.text('SENDME'), findsOneWidget);
+    expect(find.text('Share Files'), findsOneWidget);
   });
 }

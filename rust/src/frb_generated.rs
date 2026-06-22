@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1918914929;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -436066087;
 
 // Section: executor
 
@@ -46,6 +46,40 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__sendme__cancel_receive_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "cancel_receive",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::sendme::cancel_receive()?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__greet_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -110,14 +144,172 @@ fn wire__crate__api__simple__init_app_impl(
         },
     )
 }
+fn wire__crate__api__sendme__start_receive_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "start_receive",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_ticket_str = <String>::sse_decode(&mut deserializer);
+            let api_temp_dir = <String>::sse_decode(&mut deserializer);
+            let api_destination_dir = <String>::sse_decode(&mut deserializer);
+            let api_sink = <StreamSink<
+                crate::api::sendme::ReceiveProgress,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::sendme::start_receive(
+                            api_ticket_str,
+                            api_temp_dir,
+                            api_destination_dir,
+                            api_sink,
+                        );
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__sendme__start_send_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "start_send",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            let api_temp_dir = <String>::sse_decode(&mut deserializer);
+            let api_sink = <StreamSink<
+                crate::api::sendme::SendProgress,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::sendme::start_send(api_path, api_temp_dir, api_sink);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__sendme__stop_send_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "stop_send",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::sendme::stop_send()?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 
 // Section: dart2rust
+
+impl SseDecode for flutter_rust_bridge::for_generated::anyhow::Error {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return flutter_rust_bridge::for_generated::anyhow::anyhow!("{}", inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<
+        crate::api::sendme::ReceiveProgress,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<crate::api::sendme::SendProgress, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
 
 impl SseDecode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut inner = <Vec<u8>>::sse_decode(deserializer);
         return String::from_utf8(inner).unwrap();
+    }
+}
+
+impl SseDecode for f64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_f64::<NativeEndian>().unwrap()
     }
 }
 
@@ -130,6 +322,111 @@ impl SseDecode for Vec<u8> {
             ans_.push(<u8>::sse_decode(deserializer));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for crate::api::sendme::ReceiveProgress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                return crate::api::sendme::ReceiveProgress::Connecting;
+            }
+            1 => {
+                return crate::api::sendme::ReceiveProgress::Connected;
+            }
+            2 => {
+                return crate::api::sendme::ReceiveProgress::RetrievingMetadata;
+            }
+            3 => {
+                let mut var_bytesDownloaded = <u64>::sse_decode(deserializer);
+                let mut var_totalBytes = <u64>::sse_decode(deserializer);
+                let mut var_percentage = <f64>::sse_decode(deserializer);
+                return crate::api::sendme::ReceiveProgress::Downloading {
+                    bytes_downloaded: var_bytesDownloaded,
+                    total_bytes: var_totalBytes,
+                    percentage: var_percentage,
+                };
+            }
+            4 => {
+                let mut var_totalBytes = <u64>::sse_decode(deserializer);
+                return crate::api::sendme::ReceiveProgress::DownloadDone {
+                    total_bytes: var_totalBytes,
+                };
+            }
+            5 => {
+                let mut var_fileName = <String>::sse_decode(deserializer);
+                let mut var_bytesExported = <u64>::sse_decode(deserializer);
+                let mut var_bytesTotal = <u64>::sse_decode(deserializer);
+                return crate::api::sendme::ReceiveProgress::Exporting {
+                    file_name: var_fileName,
+                    bytes_exported: var_bytesExported,
+                    bytes_total: var_bytesTotal,
+                };
+            }
+            6 => {
+                let mut var_totalFiles = <u64>::sse_decode(deserializer);
+                let mut var_totalBytes = <u64>::sse_decode(deserializer);
+                return crate::api::sendme::ReceiveProgress::Finished {
+                    total_files: var_totalFiles,
+                    total_bytes: var_totalBytes,
+                };
+            }
+            7 => {
+                let mut var_error = <String>::sse_decode(deserializer);
+                return crate::api::sendme::ReceiveProgress::Failed { error: var_error };
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
+impl SseDecode for crate::api::sendme::SendProgress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                let mut var_fileName = <String>::sse_decode(deserializer);
+                let mut var_bytesDone = <u64>::sse_decode(deserializer);
+                let mut var_bytesTotal = <u64>::sse_decode(deserializer);
+                return crate::api::sendme::SendProgress::Importing {
+                    file_name: var_fileName,
+                    bytes_done: var_bytesDone,
+                    bytes_total: var_bytesTotal,
+                };
+            }
+            1 => {
+                let mut var_totalSize = <u64>::sse_decode(deserializer);
+                return crate::api::sendme::SendProgress::ImportDone {
+                    total_size: var_totalSize,
+                };
+            }
+            2 => {
+                return crate::api::sendme::SendProgress::StartingEndpoint;
+            }
+            3 => {
+                let mut var_ticket = <String>::sse_decode(deserializer);
+                return crate::api::sendme::SendProgress::Sharing { ticket: var_ticket };
+            }
+            4 => {
+                let mut var_error = <String>::sse_decode(deserializer);
+                return crate::api::sendme::SendProgress::Failed { error: var_error };
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
+impl SseDecode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u64::<NativeEndian>().unwrap()
     }
 }
 
@@ -168,7 +465,11 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        2 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        1 => wire__crate__api__sendme__cancel_receive_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__sendme__start_receive_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__sendme__start_send_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__sendme__stop_send_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -181,17 +482,156 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
 
 // Section: rust2dart
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::sendme::ReceiveProgress {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            crate::api::sendme::ReceiveProgress::Connecting => [0.into_dart()].into_dart(),
+            crate::api::sendme::ReceiveProgress::Connected => [1.into_dart()].into_dart(),
+            crate::api::sendme::ReceiveProgress::RetrievingMetadata => [2.into_dart()].into_dart(),
+            crate::api::sendme::ReceiveProgress::Downloading {
+                bytes_downloaded,
+                total_bytes,
+                percentage,
+            } => [
+                3.into_dart(),
+                bytes_downloaded.into_into_dart().into_dart(),
+                total_bytes.into_into_dart().into_dart(),
+                percentage.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::sendme::ReceiveProgress::DownloadDone { total_bytes } => {
+                [4.into_dart(), total_bytes.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::sendme::ReceiveProgress::Exporting {
+                file_name,
+                bytes_exported,
+                bytes_total,
+            } => [
+                5.into_dart(),
+                file_name.into_into_dart().into_dart(),
+                bytes_exported.into_into_dart().into_dart(),
+                bytes_total.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::sendme::ReceiveProgress::Finished {
+                total_files,
+                total_bytes,
+            } => [
+                6.into_dart(),
+                total_files.into_into_dart().into_dart(),
+                total_bytes.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::sendme::ReceiveProgress::Failed { error } => {
+                [7.into_dart(), error.into_into_dart().into_dart()].into_dart()
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::sendme::ReceiveProgress
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::sendme::ReceiveProgress>
+    for crate::api::sendme::ReceiveProgress
+{
+    fn into_into_dart(self) -> crate::api::sendme::ReceiveProgress {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::sendme::SendProgress {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            crate::api::sendme::SendProgress::Importing {
+                file_name,
+                bytes_done,
+                bytes_total,
+            } => [
+                0.into_dart(),
+                file_name.into_into_dart().into_dart(),
+                bytes_done.into_into_dart().into_dart(),
+                bytes_total.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::sendme::SendProgress::ImportDone { total_size } => {
+                [1.into_dart(), total_size.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::sendme::SendProgress::StartingEndpoint => [2.into_dart()].into_dart(),
+            crate::api::sendme::SendProgress::Sharing { ticket } => {
+                [3.into_dart(), ticket.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::sendme::SendProgress::Failed { error } => {
+                [4.into_dart(), error.into_into_dart().into_dart()].into_dart()
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::sendme::SendProgress
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::sendme::SendProgress>
+    for crate::api::sendme::SendProgress
+{
+    fn into_into_dart(self) -> crate::api::sendme::SendProgress {
+        self
+    }
+}
+
+impl SseEncode for flutter_rust_bridge::for_generated::anyhow::Error {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(format!("{:?}", self), serializer);
+    }
+}
+
+impl SseEncode
+    for StreamSink<
+        crate::api::sendme::ReceiveProgress,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
+    for StreamSink<crate::api::sendme::SendProgress, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
 impl SseEncode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.into_bytes(), serializer);
+    }
+}
+
+impl SseEncode for f64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
     }
 }
 
@@ -202,6 +642,105 @@ impl SseEncode for Vec<u8> {
         for item in self {
             <u8>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::sendme::ReceiveProgress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::sendme::ReceiveProgress::Connecting => {
+                <i32>::sse_encode(0, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::Connected => {
+                <i32>::sse_encode(1, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::RetrievingMetadata => {
+                <i32>::sse_encode(2, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::Downloading {
+                bytes_downloaded,
+                total_bytes,
+                percentage,
+            } => {
+                <i32>::sse_encode(3, serializer);
+                <u64>::sse_encode(bytes_downloaded, serializer);
+                <u64>::sse_encode(total_bytes, serializer);
+                <f64>::sse_encode(percentage, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::DownloadDone { total_bytes } => {
+                <i32>::sse_encode(4, serializer);
+                <u64>::sse_encode(total_bytes, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::Exporting {
+                file_name,
+                bytes_exported,
+                bytes_total,
+            } => {
+                <i32>::sse_encode(5, serializer);
+                <String>::sse_encode(file_name, serializer);
+                <u64>::sse_encode(bytes_exported, serializer);
+                <u64>::sse_encode(bytes_total, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::Finished {
+                total_files,
+                total_bytes,
+            } => {
+                <i32>::sse_encode(6, serializer);
+                <u64>::sse_encode(total_files, serializer);
+                <u64>::sse_encode(total_bytes, serializer);
+            }
+            crate::api::sendme::ReceiveProgress::Failed { error } => {
+                <i32>::sse_encode(7, serializer);
+                <String>::sse_encode(error, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
+impl SseEncode for crate::api::sendme::SendProgress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::sendme::SendProgress::Importing {
+                file_name,
+                bytes_done,
+                bytes_total,
+            } => {
+                <i32>::sse_encode(0, serializer);
+                <String>::sse_encode(file_name, serializer);
+                <u64>::sse_encode(bytes_done, serializer);
+                <u64>::sse_encode(bytes_total, serializer);
+            }
+            crate::api::sendme::SendProgress::ImportDone { total_size } => {
+                <i32>::sse_encode(1, serializer);
+                <u64>::sse_encode(total_size, serializer);
+            }
+            crate::api::sendme::SendProgress::StartingEndpoint => {
+                <i32>::sse_encode(2, serializer);
+            }
+            crate::api::sendme::SendProgress::Sharing { ticket } => {
+                <i32>::sse_encode(3, serializer);
+                <String>::sse_encode(ticket, serializer);
+            }
+            crate::api::sendme::SendProgress::Failed { error } => {
+                <i32>::sse_encode(4, serializer);
+                <String>::sse_encode(error, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
+impl SseEncode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
     }
 }
 

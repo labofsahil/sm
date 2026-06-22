@@ -3,6 +3,7 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/sendme.dart';
 import 'api/simple.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -66,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1918914929;
+  int get rustContentHash => -436066087;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -78,9 +79,24 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<void> crateApiSendmeCancelReceive();
+
   String crateApiSimpleGreet({required String name});
 
   Future<void> crateApiSimpleInitApp();
+
+  Stream<ReceiveProgress> crateApiSendmeStartReceive({
+    required String ticketStr,
+    required String tempDir,
+    required String destinationDir,
+  });
+
+  Stream<SendProgress> crateApiSendmeStartSend({
+    required String path,
+    required String tempDir,
+  });
+
+  Future<void> crateApiSendmeStopSend();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -92,13 +108,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Future<void> crateApiSendmeCancelReceive() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiSendmeCancelReceiveConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendmeCancelReceiveConstMeta =>
+      const TaskConstMeta(debugName: "cancel_receive", argNames: []);
+
+  @override
   String crateApiSimpleGreet({required String name}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -123,7 +166,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 3,
             port: port_,
           );
         },
@@ -141,6 +184,135 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
+  @override
+  Stream<ReceiveProgress> crateApiSendmeStartReceive({
+    required String ticketStr,
+    required String tempDir,
+    required String destinationDir,
+  }) {
+    final sink = RustStreamSink<ReceiveProgress>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(ticketStr, serializer);
+            sse_encode_String(tempDir, serializer);
+            sse_encode_String(destinationDir, serializer);
+            sse_encode_StreamSink_receive_progress_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 4,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiSendmeStartReceiveConstMeta,
+          argValues: [ticketStr, tempDir, destinationDir, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiSendmeStartReceiveConstMeta => const TaskConstMeta(
+    debugName: "start_receive",
+    argNames: ["ticketStr", "tempDir", "destinationDir", "sink"],
+  );
+
+  @override
+  Stream<SendProgress> crateApiSendmeStartSend({
+    required String path,
+    required String tempDir,
+  }) {
+    final sink = RustStreamSink<SendProgress>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(path, serializer);
+            sse_encode_String(tempDir, serializer);
+            sse_encode_StreamSink_send_progress_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 5,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiSendmeStartSendConstMeta,
+          argValues: [path, tempDir, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiSendmeStartSendConstMeta => const TaskConstMeta(
+    debugName: "start_send",
+    argNames: ["path", "tempDir", "sink"],
+  );
+
+  @override
+  Future<void> crateApiSendmeStopSend() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiSendmeStopSendConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendmeStopSendConstMeta =>
+      const TaskConstMeta(debugName: "stop_send", argNames: []);
+
+  @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return AnyhowException(raw as String);
+  }
+
+  @protected
+  RustStreamSink<ReceiveProgress> dco_decode_StreamSink_receive_progress_Sse(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<SendProgress> dco_decode_StreamSink_send_progress_Sse(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
   @protected
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -148,9 +320,82 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  double dco_decode_f_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  ReceiveProgress dco_decode_receive_progress(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return ReceiveProgress_Connecting();
+      case 1:
+        return ReceiveProgress_Connected();
+      case 2:
+        return ReceiveProgress_RetrievingMetadata();
+      case 3:
+        return ReceiveProgress_Downloading(
+          bytesDownloaded: dco_decode_u_64(raw[1]),
+          totalBytes: dco_decode_u_64(raw[2]),
+          percentage: dco_decode_f_64(raw[3]),
+        );
+      case 4:
+        return ReceiveProgress_DownloadDone(
+          totalBytes: dco_decode_u_64(raw[1]),
+        );
+      case 5:
+        return ReceiveProgress_Exporting(
+          fileName: dco_decode_String(raw[1]),
+          bytesExported: dco_decode_u_64(raw[2]),
+          bytesTotal: dco_decode_u_64(raw[3]),
+        );
+      case 6:
+        return ReceiveProgress_Finished(
+          totalFiles: dco_decode_u_64(raw[1]),
+          totalBytes: dco_decode_u_64(raw[2]),
+        );
+      case 7:
+        return ReceiveProgress_Failed(error: dco_decode_String(raw[1]));
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
+  SendProgress dco_decode_send_progress(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return SendProgress_Importing(
+          fileName: dco_decode_String(raw[1]),
+          bytesDone: dco_decode_u_64(raw[2]),
+          bytesTotal: dco_decode_u_64(raw[3]),
+        );
+      case 1:
+        return SendProgress_ImportDone(totalSize: dco_decode_u_64(raw[1]));
+      case 2:
+        return SendProgress_StartingEndpoint();
+      case 3:
+        return SendProgress_Sharing(ticket: dco_decode_String(raw[1]));
+      case 4:
+        return SendProgress_Failed(error: dco_decode_String(raw[1]));
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
   }
 
   @protected
@@ -166,6 +411,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_String(deserializer);
+    return AnyhowException(inner);
+  }
+
+  @protected
+  RustStreamSink<ReceiveProgress> sse_decode_StreamSink_receive_progress_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<SendProgress> sse_decode_StreamSink_send_progress_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
@@ -173,10 +441,101 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  ReceiveProgress sse_decode_receive_progress(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return ReceiveProgress_Connecting();
+      case 1:
+        return ReceiveProgress_Connected();
+      case 2:
+        return ReceiveProgress_RetrievingMetadata();
+      case 3:
+        var var_bytesDownloaded = sse_decode_u_64(deserializer);
+        var var_totalBytes = sse_decode_u_64(deserializer);
+        var var_percentage = sse_decode_f_64(deserializer);
+        return ReceiveProgress_Downloading(
+          bytesDownloaded: var_bytesDownloaded,
+          totalBytes: var_totalBytes,
+          percentage: var_percentage,
+        );
+      case 4:
+        var var_totalBytes = sse_decode_u_64(deserializer);
+        return ReceiveProgress_DownloadDone(totalBytes: var_totalBytes);
+      case 5:
+        var var_fileName = sse_decode_String(deserializer);
+        var var_bytesExported = sse_decode_u_64(deserializer);
+        var var_bytesTotal = sse_decode_u_64(deserializer);
+        return ReceiveProgress_Exporting(
+          fileName: var_fileName,
+          bytesExported: var_bytesExported,
+          bytesTotal: var_bytesTotal,
+        );
+      case 6:
+        var var_totalFiles = sse_decode_u_64(deserializer);
+        var var_totalBytes = sse_decode_u_64(deserializer);
+        return ReceiveProgress_Finished(
+          totalFiles: var_totalFiles,
+          totalBytes: var_totalBytes,
+        );
+      case 7:
+        var var_error = sse_decode_String(deserializer);
+        return ReceiveProgress_Failed(error: var_error);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  SendProgress sse_decode_send_progress(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_fileName = sse_decode_String(deserializer);
+        var var_bytesDone = sse_decode_u_64(deserializer);
+        var var_bytesTotal = sse_decode_u_64(deserializer);
+        return SendProgress_Importing(
+          fileName: var_fileName,
+          bytesDone: var_bytesDone,
+          bytesTotal: var_bytesTotal,
+        );
+      case 1:
+        var var_totalSize = sse_decode_u_64(deserializer);
+        return SendProgress_ImportDone(totalSize: var_totalSize);
+      case 2:
+        return SendProgress_StartingEndpoint();
+      case 3:
+        var var_ticket = sse_decode_String(deserializer);
+        return SendProgress_Sharing(ticket: var_ticket);
+      case 4:
+        var var_error = sse_decode_String(deserializer);
+        return SendProgress_Failed(error: var_error);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
   }
 
   @protected
@@ -203,9 +562,58 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.message, serializer);
+  }
+
+  @protected
+  void sse_encode_StreamSink_receive_progress_Sse(
+    RustStreamSink<ReceiveProgress> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_receive_progress,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
+  void sse_encode_StreamSink_send_progress_Sse(
+    RustStreamSink<SendProgress> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_send_progress,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
   }
 
   @protected
@@ -216,6 +624,86 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_receive_progress(
+    ReceiveProgress self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case ReceiveProgress_Connecting():
+        sse_encode_i_32(0, serializer);
+      case ReceiveProgress_Connected():
+        sse_encode_i_32(1, serializer);
+      case ReceiveProgress_RetrievingMetadata():
+        sse_encode_i_32(2, serializer);
+      case ReceiveProgress_Downloading(
+        bytesDownloaded: final bytesDownloaded,
+        totalBytes: final totalBytes,
+        percentage: final percentage,
+      ):
+        sse_encode_i_32(3, serializer);
+        sse_encode_u_64(bytesDownloaded, serializer);
+        sse_encode_u_64(totalBytes, serializer);
+        sse_encode_f_64(percentage, serializer);
+      case ReceiveProgress_DownloadDone(totalBytes: final totalBytes):
+        sse_encode_i_32(4, serializer);
+        sse_encode_u_64(totalBytes, serializer);
+      case ReceiveProgress_Exporting(
+        fileName: final fileName,
+        bytesExported: final bytesExported,
+        bytesTotal: final bytesTotal,
+      ):
+        sse_encode_i_32(5, serializer);
+        sse_encode_String(fileName, serializer);
+        sse_encode_u_64(bytesExported, serializer);
+        sse_encode_u_64(bytesTotal, serializer);
+      case ReceiveProgress_Finished(
+        totalFiles: final totalFiles,
+        totalBytes: final totalBytes,
+      ):
+        sse_encode_i_32(6, serializer);
+        sse_encode_u_64(totalFiles, serializer);
+        sse_encode_u_64(totalBytes, serializer);
+      case ReceiveProgress_Failed(error: final error):
+        sse_encode_i_32(7, serializer);
+        sse_encode_String(error, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_send_progress(SendProgress self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case SendProgress_Importing(
+        fileName: final fileName,
+        bytesDone: final bytesDone,
+        bytesTotal: final bytesTotal,
+      ):
+        sse_encode_i_32(0, serializer);
+        sse_encode_String(fileName, serializer);
+        sse_encode_u_64(bytesDone, serializer);
+        sse_encode_u_64(bytesTotal, serializer);
+      case SendProgress_ImportDone(totalSize: final totalSize):
+        sse_encode_i_32(1, serializer);
+        sse_encode_u_64(totalSize, serializer);
+      case SendProgress_StartingEndpoint():
+        sse_encode_i_32(2, serializer);
+      case SendProgress_Sharing(ticket: final ticket):
+        sse_encode_i_32(3, serializer);
+        sse_encode_String(ticket, serializer);
+      case SendProgress_Failed(error: final error):
+        sse_encode_i_32(4, serializer);
+        sse_encode_String(error, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
   }
 
   @protected
