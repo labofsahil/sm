@@ -8,18 +8,27 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'sendme.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `canonicalized_path_to_string`, `export_with_progress`, `get_export_path`, `get_runtime`, `import_with_progress`, `start_receive_inner`, `start_send_inner`, `validate_path_component`
+// These functions are ignored because they are not marked as `pub`: `canonicalized_path_to_string`, `export_with_progress`, `get_export_path`, `import_with_progress`, `start_receive_inner`, `start_send_inner`, `validate_path_component`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ReceiveSession`, `SendSession`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`
+// These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `report`, `report`
 
+/// Start sharing a file or directory.
+///
+/// This is an async function that streams progress events back to Dart.
+/// flutter_rust_bridge will run it on its own tokio runtime.
 Stream<SendProgress> startSend({
   required String path,
   required String tempDir,
 }) =>
     RustLib.instance.api.crateApiSendmeStartSend(path: path, tempDir: tempDir);
 
+/// Stop an active send session and clean up resources.
 Future<void> stopSend() => RustLib.instance.api.crateApiSendmeStopSend();
 
+/// Start receiving (downloading) data using a sendme ticket.
+///
+/// This is an async function that streams progress events back to Dart.
 Stream<ReceiveProgress> startReceive({
   required String ticketStr,
   required String tempDir,
@@ -30,8 +39,17 @@ Stream<ReceiveProgress> startReceive({
   destinationDir: destinationDir,
 );
 
+/// Cancel an active receive session.
 Future<void> cancelReceive() =>
     RustLib.instance.api.crateApiSendmeCancelReceive();
+
+abstract class ReceiveProgressReporter {
+  Future<void> report({required ReceiveProgress progress});
+}
+
+abstract class SendProgressReporter {
+  Future<void> report({required SendProgress progress});
+}
 
 @freezed
 sealed class ReceiveProgress with _$ReceiveProgress {

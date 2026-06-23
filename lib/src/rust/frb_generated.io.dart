@@ -36,6 +36,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  ReceiveProgressReporter dco_decode_TraitDef_ReceiveProgressReporter(
+    dynamic raw,
+  );
+
+  @protected
+  SendProgressReporter dco_decode_TraitDef_SendProgressReporter(dynamic raw);
+
+  @protected
+  ReceiveProgress dco_decode_box_autoadd_receive_progress(dynamic raw);
+
+  @protected
+  SendProgress dco_decode_box_autoadd_send_progress(dynamic raw);
+
+  @protected
   double dco_decode_f_64(dynamic raw);
 
   @protected
@@ -71,6 +85,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  ReceiveProgress sse_decode_box_autoadd_receive_progress(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SendProgress sse_decode_box_autoadd_send_progress(
+    SseDeserializer deserializer,
+  );
 
   @protected
   double sse_decode_f_64(SseDeserializer deserializer);
@@ -119,6 +143,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_receive_progress(
+    ReceiveProgress self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_send_progress(
+    SendProgress self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_f_64(double self, SseSerializer serializer);

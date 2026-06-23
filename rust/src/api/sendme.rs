@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use std::str::FromStr;
 use std::time::Duration;
 use once_cell::sync::Lazy;
-use rand::Rng;
 
 use iroh::Endpoint;
 use iroh::RelayMode;
@@ -21,7 +20,9 @@ use tokio::sync::oneshot;
 
 use crate::frb_generated::StreamSink;
 
-#[derive(Debug, Clone)]
+// ─── Progress Enums ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SendProgress {
     Importing {
         file_name: String,
@@ -40,7 +41,7 @@ pub enum SendProgress {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReceiveProgress {
     Connecting,
     Connected,
@@ -67,8 +68,34 @@ pub enum ReceiveProgress {
     },
 }
 
+// ─── Progress Reporter Traits ────────────────────────────────────
+
+pub trait SendProgressReporter: Send + Sync + 'static {
+    fn report(&self, progress: SendProgress);
+}
+
+impl SendProgressReporter for StreamSink<SendProgress> {
+    fn report(&self, progress: SendProgress) {
+        let _ = self.add(progress);
+    }
+}
+
+pub trait ReceiveProgressReporter: Send + Sync + 'static {
+    fn report(&self, progress: ReceiveProgress);
+}
+
+impl ReceiveProgressReporter for StreamSink<ReceiveProgress> {
+    fn report(&self, progress: ReceiveProgress) {
+        let _ = self.add(progress);
+    }
+}
+
+// ─── Session State ───────────────────────────────────────────────
+
 struct SendSession {
     router: Router,
+    /// Kept alive to prevent the blob from being garbage collected.
+    #[allow(dead_code)]
     temp_tag: TempTag,
     blobs_data_dir: PathBuf,
 }
@@ -79,38 +106,32 @@ struct ReceiveSession {
 
 static ACTIVE_SEND: Lazy<Mutex<Option<SendSession>>> = Lazy::new(|| Mutex::new(None));
 static ACTIVE_RECEIVE: Lazy<Mutex<Option<ReceiveSession>>> = Lazy::new(|| Mutex::new(None));
-static TOKIO_RUNTIME: Lazy<Mutex<Option<tokio::runtime::Runtime>>> = Lazy::new(|| Mutex::new(None));
 
-fn get_runtime() -> tokio::runtime::Handle {
-    let mut guard = TOKIO_RUNTIME.lock().unwrap();
-    if guard.is_none() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build Tokio runtime");
-        *guard = Some(rt);
-    }
-    guard.as_ref().unwrap().handle().clone()
-}
+// ─── Public API ──────────────────────────────────────────────────
 
-pub fn start_send(
+/// Start sharing a file or directory.
+///
+/// This is an async function that streams progress events back to Dart.
+/// flutter_rust_bridge will run it on its own tokio runtime.
+pub async fn start_send(
     path: String,
     temp_dir: String,
     sink: StreamSink<SendProgress>,
 ) {
-    let handle = get_runtime();
-    handle.spawn(async move {
-        if let Err(e) = start_send_inner(path, temp_dir, sink.clone()).await {
-            let _ = sink.add(SendProgress::Failed { error: e.to_string() });
-        }
-    });
+    if let Err(e) = start_send_inner(path, temp_dir, &sink).await {
+        let _ = sink.add(SendProgress::Failed {
+            error: e.to_string(),
+        });
+    }
 }
 
+/// Stop an active send session and clean up resources.
 pub fn stop_send() -> anyhow::Result<()> {
     let mut guard = ACTIVE_SEND.lock().unwrap();
     if let Some(session) = guard.take() {
-        let rt = get_runtime();
-        rt.spawn(async move {
+        // Spawn the async cleanup onto the current tokio runtime.
+        // This is safe because FRB provides a tokio runtime context.
+        tokio::spawn(async move {
             let _ = session.router.shutdown().await;
             let _ = tokio::fs::remove_dir_all(session.blobs_data_dir).await;
         });
@@ -118,20 +139,23 @@ pub fn stop_send() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn start_receive(
+/// Start receiving (downloading) data using a sendme ticket.
+///
+/// This is an async function that streams progress events back to Dart.
+pub async fn start_receive(
     ticket_str: String,
     temp_dir: String,
     destination_dir: String,
     sink: StreamSink<ReceiveProgress>,
 ) {
-    let handle = get_runtime();
-    handle.spawn(async move {
-        if let Err(e) = start_receive_inner(ticket_str, temp_dir, destination_dir, sink.clone()).await {
-            let _ = sink.add(ReceiveProgress::Failed { error: e.to_string() });
-        }
-    });
+    if let Err(e) = start_receive_inner(ticket_str, temp_dir, destination_dir, &sink).await {
+        let _ = sink.add(ReceiveProgress::Failed {
+            error: e.to_string(),
+        });
+    }
 }
 
+/// Cancel an active receive session.
 pub fn cancel_receive() -> anyhow::Result<()> {
     let mut guard = ACTIVE_RECEIVE.lock().unwrap();
     if let Some(session) = guard.take() {
@@ -140,117 +164,129 @@ pub fn cancel_receive() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ─── Send Implementation ─────────────────────────────────────────
+
 async fn start_send_inner(
     path_str: String,
     temp_dir_str: String,
-    sink: StreamSink<SendProgress>,
+    reporter: &impl SendProgressReporter,
 ) -> anyhow::Result<()> {
-    // 1. Clean up existing send session
+    // 1. Clean up any existing send session
     let _ = stop_send();
-    
-    let _ = sink.add(SendProgress::StartingEndpoint);
-    
-    // 2. Secret Key
+
+    reporter.report(SendProgress::StartingEndpoint);
+
+    // 2. Generate a fresh secret key for this session
     let secret_key = iroh::SecretKey::generate();
-    
-    // 3. Create endpoint builder
-    let builder = Endpoint::builder(iroh::endpoint::presets::N0)
+
+    // 3. Create the iroh endpoint with the N0 preset (includes relay + DNS discovery)
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
         .alpns(vec![ALPN.to_vec()])
         .secret_key(secret_key)
-        .relay_mode(RelayMode::Default);
-        
-    let endpoint = builder.bind().await?;
-    
-    // 4. Set up temporary blobs directory inside target temp_dir
-    let suffix = rand::thread_rng().gen::<[u8; 16]>();
-    let blobs_data_dir = PathBuf::from(temp_dir_str).join(format!(".sendme-send-{}", hex::encode(suffix)));
+        .relay_mode(RelayMode::Default)
+        .bind()
+        .await?;
+
+    // 4. Set up a temporary blobs directory
+    let suffix: [u8; 16] = rand::random();
+    let blobs_data_dir = PathBuf::from(&temp_dir_str)
+        .join(format!(".sendme-send-{}", hex::encode(suffix)));
     tokio::fs::create_dir_all(&blobs_data_dir).await?;
-    
+
     let store = FsStore::load(&blobs_data_dir).await?;
     let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
-    
-    // 5. Import the file or directory
+
+    // 5. Import the file or directory into the blob store
     let path = PathBuf::from(path_str);
-    let (temp_tag, _size, _collection) = import_with_progress(path, &store, &sink).await?;
-    
-    // 6. Router and Endpoint binding
+    let (temp_tag, _size, _collection) = import_with_progress(path, &store, reporter).await?;
+
+    // 6. Set up the protocol router to serve blobs
     let router = Router::builder(endpoint)
         .accept(ALPN, blobs)
         .spawn();
-        
-    // Wait for endpoint to get online (wait for relay connection)
+
+    // 7. Wait for the endpoint to come online (relay connection)
     let ep = router.endpoint().clone();
-    let _ = tokio::time::timeout(Duration::from_secs(10), async move {
+    let _ = tokio::time::timeout(Duration::from_secs(30), async move {
         let _ = ep.online().await;
-    }).await;
-    
-    // 7. Make ticket
+    })
+    .await;
+
+    // 8. Generate the share ticket
     let addr = router.endpoint().addr();
     let hash = temp_tag.hash();
-    let ticket = BlobTicket::new(addr, hash, iroh_blobs::BlobFormat::HashSeq);
+    let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
     let ticket_str = ticket.to_string();
-    
-    // Save session
+
+    // 9. Store the session so stop_send() can clean up later.
+    // The temp_tag MUST be kept alive to prevent garbage collection of the data.
     let session = SendSession {
         router,
         temp_tag,
         blobs_data_dir,
     };
     *ACTIVE_SEND.lock().unwrap() = Some(session);
-    
-    let _ = sink.add(SendProgress::Sharing { ticket: ticket_str });
-    
+
+    reporter.report(SendProgress::Sharing { ticket: ticket_str });
+
     Ok(())
 }
+
+// ─── Receive Implementation ──────────────────────────────────────
 
 async fn start_receive_inner(
     ticket_str: String,
     temp_dir_str: String,
     destination_dir_str: String,
-    sink: StreamSink<ReceiveProgress>,
+    reporter: &impl ReceiveProgressReporter,
 ) -> anyhow::Result<()> {
-    // 1. Cancel any active receive session first
+    // 1. Cancel any existing receive session
     let _ = cancel_receive();
-    
-    // Create cancellation channel
+
+    // 2. Create a cancellation channel for this session
     let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
     *ACTIVE_RECEIVE.lock().unwrap() = Some(ReceiveSession { cancel_tx });
-    
+
+    // 3. Parse the ticket
     let ticket = BlobTicket::from_str(&ticket_str)?;
     let addr = ticket.addr().clone();
-    
-    let _ = sink.add(ReceiveProgress::Connecting);
-    
+
+    reporter.report(ReceiveProgress::Connecting);
+
+    // 4. Create a receiver endpoint
     let secret_key = iroh::SecretKey::generate();
     let mut builder = Endpoint::builder(iroh::endpoint::presets::N0)
         .alpns(vec![])
         .secret_key(secret_key)
         .relay_mode(RelayMode::Default);
-        
+
+    // If ticket has no relay or direct addresses, enable DNS lookup
     if ticket.addr().relay_urls().next().is_none() && ticket.addr().ip_addrs().next().is_none() {
         builder = builder.address_lookup(iroh::address_lookup::DnsAddressLookup::n0_dns());
     }
-    
+
     let endpoint = builder.bind().await?;
-    
-    // Set up temp directory inside target temp_dir
+
+    // 5. Set up temp directory for the blob store
     let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());
-    let iroh_data_dir = PathBuf::from(temp_dir_str).join(dir_name);
+    let iroh_data_dir = PathBuf::from(&temp_dir_str).join(dir_name);
     tokio::fs::create_dir_all(&iroh_data_dir).await?;
-    
+
     let db = FsStore::load(&iroh_data_dir).await?;
     let db_clone = db.clone();
-    
-    // Run the main receive future with select to allow cancellation
+
+    // 6. Run the receive operation with cancellation support
     let receive_fut = async {
         let hash_and_format = ticket.hash_and_format();
         let local = db.remote().local(hash_and_format).await?;
-        
+
         let (_stats, total_files, payload_size) = if !local.is_complete() {
+            // Connect to the sender
             let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
-            let _ = sink.add(ReceiveProgress::Connected);
-            let _ = sink.add(ReceiveProgress::RetrievingMetadata);
-            
+            reporter.report(ReceiveProgress::Connected);
+            reporter.report(ReceiveProgress::RetrievingMetadata);
+
+            // Get the hash sequence and sizes for progress reporting
             let (_hash_seq, sizes) = iroh_blobs::get::request::get_hash_seq_and_sizes(
                 &connection,
                 &hash_and_format.hash,
@@ -258,15 +294,16 @@ async fn start_receive_inner(
                 None,
             )
             .await?;
-            
+
             let total_size = sizes.iter().copied().sum::<u64>();
             let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
-            let total_files = (sizes.len().saturating_sub(1)) as u64;
-            
+            let total_files = sizes.len().saturating_sub(1) as u64;
+
+            // Execute the download
             let get = db.remote().execute_get(connection, local.missing());
             let mut stream = get.stream();
             let mut stats = iroh_blobs::get::Stats::default();
-            
+
             while let Some(item) = stream.next().await {
                 match item {
                     GetProgressItem::Progress(offset) => {
@@ -275,7 +312,7 @@ async fn start_receive_inner(
                         } else {
                             0.0
                         };
-                        let _ = sink.add(ReceiveProgress::Downloading {
+                        reporter.report(ReceiveProgress::Downloading {
                             bytes_downloaded: offset,
                             total_bytes: total_size,
                             percentage,
@@ -290,27 +327,31 @@ async fn start_receive_inner(
                     }
                 }
             }
-            let _ = sink.add(ReceiveProgress::DownloadDone { total_bytes: total_size });
+            reporter.report(ReceiveProgress::DownloadDone {
+                total_bytes: total_size,
+            });
             (stats, total_files, payload_size)
         } else {
+            // Already downloaded
             let total_files = local.children().unwrap_or(1) - 1;
             (iroh_blobs::get::Stats::default(), total_files, 0)
         };
-        
+
+        // Load the collection metadata from the downloaded blobs
         let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
-        
-        // Export collection
-        let _ = sink.add(ReceiveProgress::Exporting {
-            file_name: "".to_string(),
+
+        // Export all files to the destination directory
+        reporter.report(ReceiveProgress::Exporting {
+            file_name: String::new(),
             bytes_exported: 0,
             bytes_total: payload_size,
         });
-        
-        export_with_progress(&db, collection, &destination_dir_str, &sink).await?;
-        
+
+        export_with_progress(&db, collection, &destination_dir_str, reporter).await?;
+
         anyhow::Ok((total_files, payload_size))
     };
-    
+
     let result = tokio::select! {
         res = receive_fut => {
             endpoint.close().await;
@@ -321,38 +362,45 @@ async fn start_receive_inner(
             anyhow::bail!("Receive operation cancelled by user")
         }
     };
-    
-    // Clean up
+
+    // Clean up temp store
     let _ = db_clone.shutdown().await;
     let _ = tokio::fs::remove_dir_all(iroh_data_dir).await;
-    
-    // Clear receive state
+
+    // Clear session state
     *ACTIVE_RECEIVE.lock().unwrap() = None;
-    
+
     match result {
         Ok((files, bytes)) => {
-            let _ = sink.add(ReceiveProgress::Finished {
+            reporter.report(ReceiveProgress::Finished {
                 total_files: files,
                 total_bytes: bytes,
             });
         }
         Err(e) => {
-            let _ = sink.add(ReceiveProgress::Failed { error: e.to_string() });
+            reporter.report(ReceiveProgress::Failed {
+                error: e.to_string(),
+            });
         }
     }
-    
+
     Ok(())
 }
+
+// ─── Import Helpers ──────────────────────────────────────────────
 
 async fn import_with_progress(
     path: PathBuf,
     db: &FsStore,
-    sink: &StreamSink<SendProgress>,
+    reporter: &impl SendProgressReporter,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
-    let root = path.parent().ok_or_else(|| anyhow::anyhow!("No parent directory"))?;
-    
+    let root = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("No parent directory"))?;
+
+    // Collect all files to import
     let mut files = Vec::new();
     if path.is_file() {
         let relative = path.strip_prefix(root)?;
@@ -370,34 +418,36 @@ async fn import_with_progress(
         }
     }
 
+    anyhow::ensure!(!files.is_empty(), "no files found to import");
+
     let mut names_and_tags = Vec::new();
-    
+
     for (name, file_path) in files.into_iter() {
         let import = db.add_path_with_opts(AddPathOptions {
             path: file_path,
             mode: ImportMode::TryReference,
             format: BlobFormat::Raw,
         });
-        
+
         let mut stream = import.stream().await;
-        let mut item_size = 0;
+        let mut item_size = 0u64;
         let temp_tag = loop {
             let item = stream
                 .next()
                 .await
                 .ok_or_else(|| anyhow::anyhow!("import stream ended without a tag"))?;
-            
+
             match item {
                 AddProgressItem::Size(size) => {
                     item_size = size;
-                    let _ = sink.add(SendProgress::Importing {
+                    reporter.report(SendProgress::Importing {
                         file_name: name.clone(),
                         bytes_done: 0,
                         bytes_total: size,
                     });
                 }
                 AddProgressItem::CopyProgress(offset) => {
-                    let _ = sink.add(SendProgress::Importing {
+                    reporter.report(SendProgress::Importing {
                         file_name: name.clone(),
                         bytes_done: offset,
                         bytes_total: item_size,
@@ -418,44 +468,50 @@ async fn import_with_progress(
 
     names_and_tags.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
     let total_size = names_and_tags.iter().map(|(_, _, size)| *size).sum::<u64>();
-    
+
+    // Build the collection from (name, hash) pairs
     let (collection, tags) = names_and_tags
         .into_iter()
         .map(|(name, tag, _)| ((name, tag.hash()), tag))
         .unzip::<_, _, Collection, Vec<_>>();
-        
-    let temp_tag = collection.clone().store(db).await?;
+
+    // Store the collection into the blob store; this returns a TempTag for the HashSeq
+    let temp_tag = collection.clone().store(db.as_ref()).await?;
+    // Now that the collection is stored, the individual blob tags can be dropped
+    // since they are protected by the collection's HashSeq
     drop(tags);
-    
-    let _ = sink.add(SendProgress::ImportDone { total_size });
+
+    reporter.report(SendProgress::ImportDone { total_size });
     Ok((temp_tag, total_size, collection))
 }
+
+// ─── Export Helpers ──────────────────────────────────────────────
 
 async fn export_with_progress(
     db: &FsStore,
     collection: Collection,
     destination_dir: &str,
-    sink: &StreamSink<ReceiveProgress>,
+    reporter: &impl ReceiveProgressReporter,
 ) -> anyhow::Result<()> {
     let root = PathBuf::from(destination_dir);
     let total_blobs = collection.len();
-    
+
     for (idx, (name, hash)) in collection.iter().enumerate() {
         let target = get_export_path(&root, name)?;
         if target.exists() {
             anyhow::bail!("target file already exists: {}", target.display());
         }
-        
+
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        
-        let _ = sink.add(ReceiveProgress::Exporting {
+
+        reporter.report(ReceiveProgress::Exporting {
             file_name: name.clone(),
             bytes_exported: idx as u64,
             bytes_total: total_blobs as u64,
         });
-        
+
         let mut stream = db
             .export_with_opts(ExportOptions {
                 hash: *hash,
@@ -464,7 +520,7 @@ async fn export_with_progress(
             })
             .stream()
             .await;
-            
+
         while let Some(item) = stream.next().await {
             match item {
                 ExportProgressItem::Size(_) => {}
@@ -476,9 +532,11 @@ async fn export_with_progress(
             }
         }
     }
-    
+
     Ok(())
 }
+
+// ─── Path Utilities ──────────────────────────────────────────────
 
 fn validate_path_component(component: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -533,4 +591,118 @@ fn canonicalized_path_to_string(
     let parts = parts.join("/");
     path_str.push_str(&parts);
     Ok(path_str)
+}
+
+// ─── Unit / Integration Tests ────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct TestSendReporter {
+        events: Arc<Mutex<Vec<SendProgress>>>,
+    }
+
+    impl SendProgressReporter for TestSendReporter {
+        fn report(&self, progress: SendProgress) {
+            self.events.lock().unwrap().push(progress);
+        }
+    }
+
+    struct TestReceiveReporter {
+        events: Arc<Mutex<Vec<ReceiveProgress>>>,
+    }
+
+    impl ReceiveProgressReporter for TestReceiveReporter {
+        fn report(&self, progress: ReceiveProgress) {
+            self.events.lock().unwrap().push(progress);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_receive_local() -> anyhow::Result<()> {
+        // Create a temporary directory structure for the test
+        let temp_base = std::env::temp_dir().join(format!("sendme-test-{}", rand::random::<u32>()));
+        tokio::fs::create_dir_all(&temp_base).await?;
+
+        let source_dir = temp_base.join("source");
+        let temp_dir = temp_base.join("temp");
+        let dest_dir = temp_base.join("dest");
+
+        tokio::fs::create_dir_all(&source_dir).await?;
+        tokio::fs::create_dir_all(&temp_dir).await?;
+        tokio::fs::create_dir_all(&dest_dir).await?;
+
+        // Create a test file
+        let file_path = source_dir.join("hello.txt");
+        let file_content = b"Hello from Sendme P2P File Sharing Bridge!";
+        tokio::fs::write(&file_path, file_content).await?;
+
+        // Start send
+        let send_events = Arc::new(Mutex::new(Vec::new()));
+        let send_reporter = TestSendReporter {
+            events: send_events.clone(),
+        };
+
+        start_send_inner(
+            file_path.to_string_lossy().to_string(),
+            temp_dir.to_string_lossy().to_string(),
+            &send_reporter,
+        )
+        .await?;
+
+        // Extract ticket
+        let mut ticket_str = String::new();
+        {
+            let events = send_events.lock().unwrap();
+            for event in events.iter() {
+                if let SendProgress::Sharing { ticket } = event {
+                    ticket_str = ticket.clone();
+                }
+            }
+        }
+        assert!(!ticket_str.is_empty(), "Ticket should not be empty");
+
+        // Start receive
+        let receive_events = Arc::new(Mutex::new(Vec::new()));
+        let receive_reporter = TestReceiveReporter {
+            events: receive_events.clone(),
+        };
+
+        start_receive_inner(
+            ticket_str,
+            temp_dir.to_string_lossy().to_string(),
+            dest_dir.to_string_lossy().to_string(),
+            &receive_reporter,
+        )
+        .await?;
+
+        // Verify the received file content
+        let received_file_path = dest_dir.join("hello.txt");
+        assert!(received_file_path.exists(), "Received file should exist at path");
+
+        let received_content = tokio::fs::read(&received_file_path).await?;
+        assert_eq!(received_content, file_content, "Content should match");
+
+        // Ensure transfer events show finished status
+        let mut finished = false;
+        {
+            let events = receive_events.lock().unwrap();
+            for event in events.iter() {
+                if let ReceiveProgress::Finished { .. } = event {
+                    finished = true;
+                }
+            }
+        }
+        assert!(finished, "Receive should finish successfully");
+
+        // Stop active send session to release locks and endpoints
+        stop_send()?;
+
+        // Clean up filesystem
+        tokio::fs::remove_dir_all(&temp_base).await?;
+
+        Ok(())
+    }
 }
