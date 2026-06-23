@@ -22,12 +22,19 @@ subprojects {
 }
 
 subprojects {
-    afterEvaluate {
-        if (project.plugins.hasPlugin("com.android.application") ||
-            project.plugins.hasPlugin("com.android.library")) {
-            project.extensions.configure<BaseExtension>("android") {
+    val configureProject = { proj: Project ->
+        if (proj.plugins.hasPlugin("com.android.application") ||
+            proj.plugins.hasPlugin("com.android.library")) {
+            proj.extensions.configure<BaseExtension>("android") {
                 compileSdkVersion(36)
             }
+        }
+    }
+    if (project.state.executed) {
+        configureProject(project)
+    } else {
+        project.afterEvaluate {
+            configureProject(project)
         }
     }
 }
