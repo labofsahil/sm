@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:my_app/src/rust/api/sendme.dart';
+import 'package:my_app/src/rust/api/simple.dart';
 import 'package:my_app/src/rust/frb_generated.dart';
 
 const Color emeraldColor = Color(0xFF10B981);
@@ -92,11 +93,35 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   // History state
   final List<TransferItem> _history = [];
 
+  // Debug log state
+  final List<String> _debugLogs = [];
+  final ScrollController _logsScrollController = ScrollController();
+  Timer? _logPollTimer;
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _initializeDefaultPaths();
+    // Poll Rust log buffer every second
+    _logPollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      final newLogs = await getDebugLogs();
+      if (newLogs.isNotEmpty && mounted) {
+        setState(() {
+          _debugLogs.addAll(newLogs);
+          if (_debugLogs.length > 1000) {
+            _debugLogs.removeRange(0, _debugLogs.length - 1000);
+          }
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_logsScrollController.hasClients) {
+            _logsScrollController.jumpTo(
+              _logsScrollController.position.maxScrollExtent,
+            );
+          }
+        });
+      }
+    });
   }
 
   Future<void> _initializeDefaultPaths() async {
@@ -116,6 +141,8 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   @override
   void dispose() {
+    _logPollTimer?.cancel();
+    _logsScrollController.dispose();
     _tabController.dispose();
     _sendSub?.cancel();
     _receiveSub?.cancel();
@@ -466,6 +493,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                     _buildSendTab(),
                     _buildReceiveTab(),
                     _buildHistoryTab(),
+                    _buildLogsTab(),
                   ],
                 ),
               ),
@@ -634,6 +662,11 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
           Tab(
             text: 'History',
             icon: Icon(Icons.history_rounded, size: 18),
+            iconMargin: EdgeInsets.only(bottom: 4),
+          ),
+          Tab(
+            text: 'Debug Logs',
+            icon: Icon(Icons.terminal_rounded, size: 18),
             iconMargin: EdgeInsets.only(bottom: 4),
           ),
         ],
@@ -1351,8 +1384,80 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       },
     );
   }
-}
 
+  Widget _buildLogsTab() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 6),
+          child: Row(
+            children: [
+              const Icon(Icons.terminal_rounded, color: Color(0xFF6366F1), size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Rust Debug Logs',
+                style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              const Spacer(),
+              Text('${_debugLogs.length} lines', style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 12)),
+              const SizedBox(width: 12),
+              TextButton.icon(
+                onPressed: () => setState(() => _debugLogs.clear()),
+                icon: const Icon(Icons.delete_sweep_rounded, size: 16),
+                label: const Text('Clear'),
+                style: TextButton.styleFrom(foregroundColor: Colors.grey[400], textStyle: GoogleFonts.inter(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D0D10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF1E1E26)),
+            ),
+            child: _debugLogs.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.hourglass_empty_rounded, color: Colors.grey[700], size: 40),
+                        const SizedBox(height: 12),
+                        Text(
+                          'No logs yet.\nStart a send or receive to see Rust logs here.',
+                          style: GoogleFonts.robotoMono(color: Colors.grey[600], fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    controller: _logsScrollController,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _debugLogs.length,
+                    itemBuilder: (ctx, i) {
+                      final line = _debugLogs[i];
+                      Color lineColor = Colors.grey[400]!;
+                      if (line.contains('[ERROR]') || line.contains('error')) lineColor = const Color(0xFFEF4444);
+                      else if (line.contains('[WARN]') || line.contains('warn')) lineColor = const Color(0xFFF59E0B);
+                      else if (line.contains('[INFO]')) lineColor = const Color(0xFF34D399);
+                      else if (line.contains('[DEBUG]')) lineColor = const Color(0xFF60A5FA);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text(line, style: GoogleFonts.robotoMono(color: lineColor, fontSize: 11, height: 1.4)),
+                      );
+                    },
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+
+}
 class _PulseDot extends StatefulWidget {
   final Color color;
 

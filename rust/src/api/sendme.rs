@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::str::FromStr;
 use std::time::Duration;
 use once_cell::sync::Lazy;
+use tracing::{debug, error, info, warn};
 
 use iroh::Endpoint;
 use iroh::RelayMode;
@@ -171,6 +172,8 @@ async fn start_send_inner(
     temp_dir_str: String,
     reporter: &impl SendProgressReporter,
 ) -> anyhow::Result<()> {
+    info!("[SEND] start_send_inner called: path={}", path_str);
+
     // 1. Clean up any existing send session
     let _ = stop_send();
 
@@ -178,48 +181,61 @@ async fn start_send_inner(
 
     // 2. Generate a fresh secret key for this session
     let secret_key = iroh::SecretKey::generate();
+    info!("[SEND] Generated secret key, binding endpoint...");
 
-    // 3. Create the iroh endpoint with the N0 preset (includes relay + DNS discovery)
+    // 3. Create the iroh endpoint with the N0 preset
     let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
         .alpns(vec![ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(RelayMode::Default)
         .bind()
-        .await?;
+        .await
+        .map_err(|e| { error!("[SEND] Failed to bind endpoint: {}", e); e })?;
+
+    info!("[SEND] Endpoint bound. ID: {}", endpoint.id());
 
     // 4. Set up a temporary blobs directory
     let suffix: [u8; 16] = rand::random();
     let blobs_data_dir = PathBuf::from(&temp_dir_str)
         .join(format!(".sendme-send-{}", hex::encode(suffix)));
     tokio::fs::create_dir_all(&blobs_data_dir).await?;
+    info!("[SEND] Blob store dir: {}", blobs_data_dir.display());
 
-    let store = FsStore::load(&blobs_data_dir).await?;
+    let store = FsStore::load(&blobs_data_dir).await
+        .map_err(|e| { error!("[SEND] FsStore::load failed: {}", e); e })?;
     let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
 
-    // 5. Import the file or directory into the blob store
-    let path = PathBuf::from(path_str);
-    let (temp_tag, _size, _collection) = import_with_progress(path, &store, reporter).await?;
+    // 5. Import the file or directory
+    let path = PathBuf::from(&path_str);
+    info!("[SEND] Importing path: {}", path.display());
+    let (temp_tag, size, _collection) = import_with_progress(path, &store, reporter).await
+        .map_err(|e| { error!("[SEND] Import failed: {}", e); e })?;
+    info!("[SEND] Import done. Hash={}, size={}", temp_tag.hash(), size);
 
     // 6. Set up the protocol router to serve blobs
     let router = Router::builder(endpoint)
         .accept(ALPN, blobs)
         .spawn();
+    info!("[SEND] Router spawned, waiting for relay online...");
 
-    // 7. Wait for the endpoint to come online (relay connection)
+    // 7. Wait for the endpoint to come online
     let ep = router.endpoint().clone();
-    let _ = tokio::time::timeout(Duration::from_secs(30), async move {
+    match tokio::time::timeout(Duration::from_secs(30), async move {
         let _ = ep.online().await;
-    })
-    .await;
+    }).await {
+        Ok(_) => info!("[SEND] Endpoint online (relay connected)"),
+        Err(_) => warn!("[SEND] Timeout waiting for relay — using local addresses only"),
+    }
 
     // 8. Generate the share ticket
     let addr = router.endpoint().addr();
+    info!("[SEND] Node addr: {:?}", addr);
     let hash = temp_tag.hash();
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
     let ticket_str = ticket.to_string();
+    info!("[SEND] Ticket generated: {}", ticket_str);
 
-    // 9. Store the session so stop_send() can clean up later.
-    // The temp_tag MUST be kept alive to prevent garbage collection of the data.
+    // 9. Store session (temp_tag kept alive to prevent GC)
     let session = SendSession {
         router,
         temp_tag,
@@ -228,6 +244,7 @@ async fn start_send_inner(
     *ACTIVE_SEND.lock().unwrap() = Some(session);
 
     reporter.report(SendProgress::Sharing { ticket: ticket_str });
+    info!("[SEND] Sharing event emitted, session active");
 
     Ok(())
 }
@@ -240,147 +257,161 @@ async fn start_receive_inner(
     destination_dir_str: String,
     reporter: &impl ReceiveProgressReporter,
 ) -> anyhow::Result<()> {
+    info!("[RECV] start_receive_inner called");
+
     // 1. Cancel any existing receive session
     let _ = cancel_receive();
 
-    // 2. Create a cancellation channel for this session
+    // 2. Create a cancellation channel
     let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
     *ACTIVE_RECEIVE.lock().unwrap() = Some(ReceiveSession { cancel_tx });
 
     // 3. Parse the ticket
-    let ticket = BlobTicket::from_str(&ticket_str)?;
+    let ticket = BlobTicket::from_str(&ticket_str)
+        .map_err(|e| { error!("[RECV] Invalid ticket: {}", e); e })?;
     let addr = ticket.addr().clone();
+    info!("[RECV] Ticket parsed. Hash={}, format={:?}", ticket.hash(), ticket.format());
+    info!("[RECV] Peer addr: relay_urls={:?}, ip_addrs={:?}",
+        ticket.addr().relay_urls().collect::<Vec<_>>(),
+        ticket.addr().ip_addrs().collect::<Vec<_>>());
 
     reporter.report(ReceiveProgress::Connecting);
 
     // 4. Create a receiver endpoint
     let secret_key = iroh::SecretKey::generate();
+    let has_relay = ticket.addr().relay_urls().next().is_some();
+    let has_direct = ticket.addr().ip_addrs().next().is_some();
+    info!("[RECV] has_relay={}, has_direct={}", has_relay, has_direct);
+
     let mut builder = Endpoint::builder(iroh::endpoint::presets::N0)
         .alpns(vec![])
         .secret_key(secret_key)
         .relay_mode(RelayMode::Default);
 
-    // If ticket has no relay or direct addresses, enable DNS lookup
-    if ticket.addr().relay_urls().next().is_none() && ticket.addr().ip_addrs().next().is_none() {
+    if !has_relay && !has_direct {
+        warn!("[RECV] No relay/direct addresses — enabling DNS lookup");
         builder = builder.address_lookup(iroh::address_lookup::DnsAddressLookup::n0_dns());
     }
 
-    let endpoint = builder.bind().await?;
+    let endpoint = builder.bind().await
+        .map_err(|e| { error!("[RECV] Endpoint bind failed: {}", e); e })?;
+    info!("[RECV] Receiver endpoint bound. ID: {}", endpoint.id());
 
-    // 5. Set up temp directory for the blob store
+    // 5. Set up temp blob store
     let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());
-    let iroh_data_dir = PathBuf::from(&temp_dir_str).join(dir_name);
+    let iroh_data_dir = PathBuf::from(&temp_dir_str).join(&dir_name);
     tokio::fs::create_dir_all(&iroh_data_dir).await?;
+    info!("[RECV] Blob store dir: {}", iroh_data_dir.display());
 
-    let db = FsStore::load(&iroh_data_dir).await?;
+    let db = FsStore::load(&iroh_data_dir).await
+        .map_err(|e| { error!("[RECV] FsStore::load failed: {}", e); e })?;
     let db_clone = db.clone();
 
-    // 6. Run the receive operation with cancellation support
+    // 6. Run the receive with cancellation
     let receive_fut = async {
         let hash_and_format = ticket.hash_and_format();
         let local = db.remote().local(hash_and_format).await?;
+        info!("[RECV] Local state: is_complete={}", local.is_complete());
 
         let (_stats, total_files, payload_size) = if !local.is_complete() {
-            // Connect to the sender
-            let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
+            info!("[RECV] Connecting to sender at {:?}...", addr);
+            let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await
+                .map_err(|e| { error!("[RECV] QUIC connect failed: {}", e); e })?;
+            info!("[RECV] QUIC connection established!");
             reporter.report(ReceiveProgress::Connected);
             reporter.report(ReceiveProgress::RetrievingMetadata);
 
-            // Get the hash sequence and sizes for progress reporting
+            info!("[RECV] Fetching hash sequence and sizes...");
             let (_hash_seq, sizes) = iroh_blobs::get::request::get_hash_seq_and_sizes(
                 &connection,
                 &hash_and_format.hash,
                 1024 * 1024 * 32,
                 None,
-            )
-            .await?;
+            ).await
+            .map_err(|e| { error!("[RECV] get_hash_seq_and_sizes failed: {}", e); e })?;
 
-            let total_size = sizes.iter().copied().sum::<u64>();
-            let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
+            let total_size: u64 = sizes.iter().copied().sum();
+            let payload_size: u64 = sizes.iter().skip(2).copied().sum();
             let total_files = sizes.len().saturating_sub(1) as u64;
+            info!("[RECV] Metadata: {} files, total_size={}, payload_size={}", total_files, total_size, payload_size);
 
-            // Execute the download
             let get = db.remote().execute_get(connection, local.missing());
             let mut stream = get.stream();
             let mut stats = iroh_blobs::get::Stats::default();
+            let mut last_pct = 0u64;
 
             while let Some(item) = stream.next().await {
                 match item {
                     GetProgressItem::Progress(offset) => {
-                        let percentage = if total_size > 0 {
-                            (offset as f64 / total_size as f64) * 100.0
-                        } else {
-                            0.0
-                        };
+                        let pct = if total_size > 0 { offset * 100 / total_size } else { 0 };
+                        if pct >= last_pct + 10 {
+                            debug!("[RECV] Download progress: {}% ({}/{})", pct, offset, total_size);
+                            last_pct = pct;
+                        }
                         reporter.report(ReceiveProgress::Downloading {
                             bytes_downloaded: offset,
                             total_bytes: total_size,
-                            percentage,
+                            percentage: pct as f64,
                         });
                     }
                     GetProgressItem::Done(value) => {
+                        info!("[RECV] Download done: {:?}", value);
                         stats = value;
                         break;
                     }
                     GetProgressItem::Error(cause) => {
+                        error!("[RECV] Download stream error: {}", cause);
                         anyhow::bail!("Download error: {}", cause);
                     }
                 }
             }
-            reporter.report(ReceiveProgress::DownloadDone {
-                total_bytes: total_size,
-            });
+            reporter.report(ReceiveProgress::DownloadDone { total_bytes: total_size });
             (stats, total_files, payload_size)
         } else {
-            // Already downloaded
+            info!("[RECV] Already fully downloaded locally");
             let total_files = local.children().unwrap_or(1) - 1;
             (iroh_blobs::get::Stats::default(), total_files, 0)
         };
 
-        // Load the collection metadata from the downloaded blobs
-        let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
+        info!("[RECV] Loading collection from store...");
+        let collection = Collection::load(hash_and_format.hash, db.as_ref()).await
+            .map_err(|e| { error!("[RECV] Collection::load failed: {}", e); e })?;
+        info!("[RECV] Collection loaded: {} entries", collection.len());
 
-        // Export all files to the destination directory
         reporter.report(ReceiveProgress::Exporting {
             file_name: String::new(),
             bytes_exported: 0,
             bytes_total: payload_size,
         });
 
-        export_with_progress(&db, collection, &destination_dir_str, reporter).await?;
+        info!("[RECV] Exporting to: {}", destination_dir_str);
+        export_with_progress(&db, collection, &destination_dir_str, reporter).await
+            .map_err(|e| { error!("[RECV] Export failed: {}", e); e })?;
 
+        info!("[RECV] Export complete! total_files={}, payload_size={}", total_files, payload_size);
         anyhow::Ok((total_files, payload_size))
     };
 
     let result = tokio::select! {
-        res = receive_fut => {
-            endpoint.close().await;
-            res
-        }
+        res = receive_fut => { endpoint.close().await; res }
         _ = &mut cancel_rx => {
+            warn!("[RECV] Cancelled by user");
             endpoint.close().await;
             anyhow::bail!("Receive operation cancelled by user")
         }
     };
 
-    // Clean up temp store
     let _ = db_clone.shutdown().await;
     let _ = tokio::fs::remove_dir_all(iroh_data_dir).await;
-
-    // Clear session state
     *ACTIVE_RECEIVE.lock().unwrap() = None;
 
     match result {
         Ok((files, bytes)) => {
-            reporter.report(ReceiveProgress::Finished {
-                total_files: files,
-                total_bytes: bytes,
-            });
+            reporter.report(ReceiveProgress::Finished { total_files: files, total_bytes: bytes });
         }
         Err(e) => {
-            reporter.report(ReceiveProgress::Failed {
-                error: e.to_string(),
-            });
+            error!("[RECV] Failed: {}", e);
+            reporter.report(ReceiveProgress::Failed { error: e.to_string() });
         }
     }
 

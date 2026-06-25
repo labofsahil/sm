@@ -3358,9 +3358,11 @@ dependencies = [
  "iroh",
  "iroh-blobs",
  "once_cell",
+ "parking_lot",
  "rand 0.9.4",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "walkdir",
 ]
 
