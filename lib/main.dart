@@ -445,6 +445,24 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     });
   }
 
+  void _copyLogsToClipboard() {
+    if (_debugLogs.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: _debugLogs.join('\n')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.greenAccent),
+            SizedBox(width: 8),
+            Text('Logs copied to clipboard'),
+          ],
+        ),
+        backgroundColor: Color(0xFF1E1E24),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   void _copyToClipboard(String text) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1401,6 +1419,17 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               const Spacer(),
               Text('${_debugLogs.length} lines', style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 12)),
               const SizedBox(width: 12),
+              TextButton.icon(
+                onPressed: _debugLogs.isEmpty ? null : _copyLogsToClipboard,
+                icon: const Icon(Icons.copy_rounded, size: 16),
+                label: const Text('Copy'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.grey[400],
+                  disabledForegroundColor: Colors.grey[700],
+                  textStyle: GoogleFonts.inter(fontSize: 12),
+                ),
+              ),
+              const SizedBox(width: 8),
               TextButton.icon(
                 onPressed: () => setState(() => _debugLogs.clear()),
                 icon: const Icon(Icons.delete_sweep_rounded, size: 16),
