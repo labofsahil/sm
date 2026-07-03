@@ -206,6 +206,13 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     try {
       final path = await FilePicker.platform.getDirectoryPath();
       if (path != null) {
+        if (path == '/') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cannot use root directory. Please use the default downloads folder.')),
+          );
+          _initializeDefaultPaths();
+          return;
+        }
         setState(() {
           _destController.text = path;
         });
@@ -338,6 +345,13 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     final ticketStr = _ticketController.text.trim();
     final dest = _destController.text.trim();
     if (ticketStr.isEmpty || dest.isEmpty) return;
+
+    if (dest == '/' || dest.startsWith('/sys') || dest.startsWith('/proc')) {
+      setState(() {
+        _receiveError = 'Cannot save to root or system directories. Please choose a valid writable folder.';
+      });
+      return;
+    }
 
     setState(() {
       _isReceiving = true;

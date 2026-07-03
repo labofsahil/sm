@@ -534,7 +534,8 @@ async fn export_with_progress(
         }
 
         if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            tokio::fs::create_dir_all(parent).await
+                .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", parent.display(), e))?;
         }
 
         reporter.report(ReceiveProgress::Exporting {
@@ -546,7 +547,7 @@ async fn export_with_progress(
         let mut stream = db
             .export_with_opts(ExportOptions {
                 hash: *hash,
-                target,
+                target: target.clone(),
                 mode: ExportMode::Copy,
             })
             .stream()
@@ -558,7 +559,7 @@ async fn export_with_progress(
                 ExportProgressItem::CopyProgress(_) => {}
                 ExportProgressItem::Done => {}
                 ExportProgressItem::Error(cause) => {
-                    anyhow::bail!("Error exporting {}: {}", name, cause);
+                    anyhow::bail!("Error exporting {} to {}: {}", name, target.display(), cause);
                 }
             }
         }
