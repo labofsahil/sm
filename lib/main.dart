@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -130,11 +131,14 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       setState(() {
         _destController.text = docs.path;
       });
-      final downloads = await getDownloadsDirectory();
-      if (downloads != null) {
-        setState(() {
-          _destController.text = downloads.path;
-        });
+      // getDownloadsDirectory returns paths that native Rust cannot write to on Android/iOS without extra permissions.
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final downloads = await getDownloadsDirectory();
+        if (downloads != null) {
+          setState(() {
+            _destController.text = downloads.path;
+          });
+        }
       }
     } catch (_) {}
   }
@@ -1198,7 +1202,10 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
           Expanded(
             child: TextField(
               controller: _destController,
-              style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
+              readOnly: Platform.isAndroid || Platform.isIOS,
+              style: GoogleFonts.inter(
+                  color: (Platform.isAndroid || Platform.isIOS) ? Colors.grey[400] : Colors.white, 
+                  fontSize: 14),
               decoration: InputDecoration(
                 border: InputBorder.none,
                 labelText: 'Destination Directory',
@@ -1206,11 +1213,12 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               ),
             ),
           ),
-          IconButton(
-            onPressed: _pickDestFolder,
-            icon: const Icon(Icons.folder_copy_rounded, color: Colors.grey, size: 20),
-            tooltip: 'Browse',
-          ),
+          if (!Platform.isAndroid && !Platform.isIOS)
+            IconButton(
+              onPressed: _pickDestFolder,
+              icon: const Icon(Icons.folder_copy_rounded, color: Colors.grey, size: 20),
+              tooltip: 'Browse',
+            ),
         ],
       ),
     );
@@ -1410,6 +1418,16 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                     ),
                 ],
               ),
+              if (!item.isSend && item.status == 'Completed') ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.share_rounded, color: Colors.white70, size: 20),
+                  tooltip: 'Share File',
+                  onPressed: () {
+                    Share.shareXFiles([XFile(item.path)]);
+                  },
+                ),
+              ],
             ],
           ),
         );
