@@ -51,6 +51,7 @@ class TransferItem {
   final String status;
   final BigInt size;
   final DateTime timestamp;
+  final List<String> files;
 
   TransferItem({
     required this.isSend,
@@ -59,6 +60,7 @@ class TransferItem {
     required this.status,
     required this.size,
     required this.timestamp,
+    required this.files,
   });
 }
 
@@ -127,9 +129,15 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   Future<void> _initializeDefaultPaths() async {
     try {
-      final docs = await getApplicationDocumentsDirectory();
+      String defaultPath;
+      if (Platform.isAndroid) {
+        final extDir = await getExternalStorageDirectory();
+        defaultPath = extDir?.path ?? (await getApplicationDocumentsDirectory()).path;
+      } else {
+        defaultPath = (await getApplicationDocumentsDirectory()).path;
+      }
       setState(() {
-        _destController.text = docs.path;
+        _destController.text = defaultPath;
       });
       // getDownloadsDirectory returns paths that native Rust cannot write to on Android/iOS without extra permissions.
       if (!Platform.isAndroid && !Platform.isIOS) {
@@ -228,6 +236,34 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     }
   }
 
+  void _showStorageInfoDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF141418),
+        title: Text(
+          'Storage Location Info',
+          style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'On Android/iOS, files are saved to the app\'s secure storage folder to comply with system security policies (Scoped Storage).\n\n'
+          'Current Location:\n${_destController.text}\n\n'
+          'You can access this folder using a File Manager, or share/export files directly from the History tab using the Share button.',
+          style: GoogleFonts.inter(color: Colors.grey[300], fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'OK',
+              style: GoogleFonts.inter(color: const Color(0xFF818CF8), fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _startSharing() async {
     if (_sendPath == null) return;
     
@@ -284,6 +320,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                     status: 'Sharing',
                     size: BigInt.zero,
                     timestamp: DateTime.now(),
+                    files: [_sendPath!],
                   ),
                 );
               }
@@ -334,6 +371,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             status: 'Stopped',
             size: old.size,
             timestamp: old.timestamp,
+            files: old.files,
           );
         }
       }
@@ -407,7 +445,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                   : 0.0;
             });
           },
-          finished: (totalFiles, totalBytes) {
+          finished: (totalFiles, totalBytes, exportedPaths) {
             setState(() {
               _isReceiving = false;
               _receiveStatus = 'Success! Saved to $dest';
@@ -422,6 +460,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                   status: 'Completed',
                   size: totalBytes,
                   timestamp: DateTime.now(),
+                  files: exportedPaths,
                 ),
               );
             });
@@ -1213,12 +1252,15 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               ),
             ),
           ),
-          if (!Platform.isAndroid && !Platform.isIOS)
-            IconButton(
-              onPressed: _pickDestFolder,
-              icon: const Icon(Icons.folder_copy_rounded, color: Colors.grey, size: 20),
-              tooltip: 'Browse',
+          IconButton(
+            onPressed: (Platform.isAndroid || Platform.isIOS) ? _showStorageInfoDialog : _pickDestFolder,
+            icon: Icon(
+              (Platform.isAndroid || Platform.isIOS) ? Icons.info_outline_rounded : Icons.folder_copy_rounded, 
+              color: Colors.grey, 
+              size: 20,
             ),
+            tooltip: (Platform.isAndroid || Platform.isIOS) ? 'Storage Info' : 'Browse',
+          ),
         ],
       ),
     );
@@ -1424,7 +1466,11 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                   icon: const Icon(Icons.share_rounded, color: Colors.white70, size: 20),
                   tooltip: 'Share File',
                   onPressed: () {
-                    Share.shareXFiles([XFile(item.path)]);
+                    if (item.files.isNotEmpty) {
+                      Share.shareXFiles(item.files.map((f) => XFile(f)).toList());
+                    } else {
+                      Share.shareXFiles([XFile(item.path)]);
+                    }
                   },
                 ),
               ],

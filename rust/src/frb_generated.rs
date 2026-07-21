@@ -419,9 +419,11 @@ impl SseDecode for crate::api::sendme::ReceiveProgress {
             6 => {
                 let mut var_totalFiles = <u64>::sse_decode(deserializer);
                 let mut var_totalBytes = <u64>::sse_decode(deserializer);
+                let mut var_exportedPaths = <Vec<String>>::sse_decode(deserializer);
                 return crate::api::sendme::ReceiveProgress::Finished {
                     total_files: var_totalFiles,
                     total_bytes: var_totalBytes,
+                    exported_paths: var_exportedPaths,
                 };
             }
             7 => {
@@ -576,10 +578,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::sendme::ReceiveProgress {
             crate::api::sendme::ReceiveProgress::Finished {
                 total_files,
                 total_bytes,
+                exported_paths,
             } => [
                 6.into_dart(),
                 total_files.into_into_dart().into_dart(),
                 total_bytes.into_into_dart().into_dart(),
+                exported_paths.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::sendme::ReceiveProgress::Failed { error } => {
@@ -747,10 +751,12 @@ impl SseEncode for crate::api::sendme::ReceiveProgress {
             crate::api::sendme::ReceiveProgress::Finished {
                 total_files,
                 total_bytes,
+                exported_paths,
             } => {
                 <i32>::sse_encode(6, serializer);
                 <u64>::sse_encode(total_files, serializer);
                 <u64>::sse_encode(total_bytes, serializer);
+                <Vec<String>>::sse_encode(exported_paths, serializer);
             }
             crate::api::sendme::ReceiveProgress::Failed { error } => {
                 <i32>::sse_encode(7, serializer);

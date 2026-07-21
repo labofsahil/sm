@@ -63,6 +63,7 @@ pub enum ReceiveProgress {
     Finished {
         total_files: u64,
         total_bytes: u64,
+        exported_paths: Vec<String>,
     },
     Failed {
         error: String,
@@ -385,11 +386,11 @@ async fn start_receive_inner(
         });
 
         info!("[RECV] Exporting to: {}", destination_dir_str);
-        export_with_progress(&db, collection, &destination_dir_str, reporter).await
+        let exported_paths = export_with_progress(&db, collection, &destination_dir_str, reporter).await
             .map_err(|e| { error!("[RECV] Export failed: {}", e); e })?;
 
         info!("[RECV] Export complete! total_files={}, payload_size={}", total_files, payload_size);
-        anyhow::Ok((total_files, payload_size))
+        anyhow::Ok((total_files, payload_size, exported_paths))
     };
 
     let result = tokio::select! {
@@ -406,8 +407,8 @@ async fn start_receive_inner(
     *ACTIVE_RECEIVE.lock().unwrap() = None;
 
     match result {
-        Ok((files, bytes)) => {
-            reporter.report(ReceiveProgress::Finished { total_files: files, total_bytes: bytes });
+        Ok((files, bytes, exported_paths)) => {
+            reporter.report(ReceiveProgress::Finished { total_files: files, total_bytes: bytes, exported_paths });
         }
         Err(e) => {
             error!("[RECV] Failed: {}", e);
@@ -523,9 +524,10 @@ async fn export_with_progress(
     collection: Collection,
     destination_dir: &str,
     reporter: &impl ReceiveProgressReporter,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<String>> {
     let root = PathBuf::from(destination_dir);
     let total_blobs = collection.len();
+    let mut exported_paths = Vec::new();
 
     for (idx, (name, hash)) in collection.iter().enumerate() {
         let target = get_export_path(&root, name)?;
@@ -563,9 +565,10 @@ async fn export_with_progress(
                 }
             }
         }
+        exported_paths.push(target.to_string_lossy().to_string());
     }
 
-    Ok(())
+    Ok(exported_paths)
 }
 
 // ─── Path Utilities ──────────────────────────────────────────────

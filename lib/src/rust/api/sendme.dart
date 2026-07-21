@@ -74,6 +74,7 @@ sealed class ReceiveProgress with _$ReceiveProgress {
   const factory ReceiveProgress.finished({
     required BigInt totalFiles,
     required BigInt totalBytes,
+    required List<String> exportedPaths,
   }) = ReceiveProgress_Finished;
   const factory ReceiveProgress.failed({required String error}) =
       ReceiveProgress_Failed;

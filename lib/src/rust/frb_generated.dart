@@ -422,6 +422,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return ReceiveProgress_Finished(
           totalFiles: dco_decode_u_64(raw[1]),
           totalBytes: dco_decode_u_64(raw[2]),
+          exportedPaths: dco_decode_list_String(raw[3]),
         );
       case 7:
         return ReceiveProgress_Failed(error: dco_decode_String(raw[1]));
@@ -578,9 +579,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 6:
         var var_totalFiles = sse_decode_u_64(deserializer);
         var var_totalBytes = sse_decode_u_64(deserializer);
+        var var_exportedPaths = sse_decode_list_String(deserializer);
         return ReceiveProgress_Finished(
           totalFiles: var_totalFiles,
           totalBytes: var_totalBytes,
+          exportedPaths: var_exportedPaths,
         );
       case 7:
         var var_error = sse_decode_String(deserializer);
@@ -779,10 +782,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case ReceiveProgress_Finished(
         totalFiles: final totalFiles,
         totalBytes: final totalBytes,
+        exportedPaths: final exportedPaths,
       ):
         sse_encode_i_32(6, serializer);
         sse_encode_u_64(totalFiles, serializer);
         sse_encode_u_64(totalBytes, serializer);
+        sse_encode_list_String(exportedPaths, serializer);
       case ReceiveProgress_Failed(error: final error):
         sse_encode_i_32(7, serializer);
         sse_encode_String(error, serializer);
