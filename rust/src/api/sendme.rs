@@ -209,8 +209,14 @@ async fn start_send_inner(
     // 5. Import the file or directory
     let path = PathBuf::from(&path_str);
     info!("[SEND] Importing path: {}", path.display());
-    let (temp_tag, size, _collection) = import_with_progress(path, &store, reporter).await
-        .map_err(|e| { error!("[SEND] Import failed: {}", e); e })?;
+    let (temp_tag, size, _collection) = match import_with_progress(path, &store, reporter).await {
+        Ok(res) => res,
+        Err(e) => {
+            error!("[SEND] Import failed: {}", e);
+            endpoint.close().await;
+            return Err(e);
+        }
+    };
     info!("[SEND] Import done. Hash={}, size={}", temp_tag.hash(), size);
 
     // 6. Set up the protocol router to serve blobs
@@ -428,9 +434,7 @@ async fn import_with_progress(
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
-    let root = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("No parent directory"))?;
+    let root = path.parent().unwrap_or_else(|| Path::new("/"));
 
     // Collect all files to import
     let mut files = Vec::new();
@@ -740,4 +744,12 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_root_path_parent_resolution() {
+        let root_path = Path::new("/");
+        let root = root_path.parent().unwrap_or_else(|| Path::new("/"));
+        assert_eq!(root, Path::new("/"));
+    }
 }
+
