@@ -7,6 +7,7 @@ import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:downloadsfolder/downloadsfolder.dart';
 
 import 'package:my_app/src/rust/api/sendme.dart';
 import 'package:my_app/src/rust/api/simple.dart';
@@ -129,25 +130,29 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   Future<void> _initializeDefaultPaths() async {
     try {
-      String defaultPath;
-      if (Platform.isAndroid) {
+      Directory? downloadsDir;
+      try {
+        downloadsDir = await getDownloadDirectory();
+      } catch (_) {}
+
+      String sendmePath;
+      if (downloadsDir != null) {
+        sendmePath = '${downloadsDir.path}/Sendme';
+      } else if (Platform.isAndroid) {
         final extDir = await getExternalStorageDirectory();
-        defaultPath = extDir?.path ?? (await getApplicationDocumentsDirectory()).path;
+        sendmePath = '${extDir?.path ?? (await getApplicationDocumentsDirectory()).path}/Sendme';
       } else {
-        defaultPath = (await getApplicationDocumentsDirectory()).path;
+        sendmePath = '${(await getApplicationDocumentsDirectory()).path}/Sendme';
       }
+
+      final dir = Directory(sendmePath);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+
       setState(() {
-        _destController.text = defaultPath;
+        _destController.text = sendmePath;
       });
-      // getDownloadsDirectory returns paths that native Rust cannot write to on Android/iOS without extra permissions.
-      if (!Platform.isAndroid && !Platform.isIOS) {
-        final downloads = await getDownloadsDirectory();
-        if (downloads != null) {
-          setState(() {
-            _destController.text = downloads.path;
-          });
-        }
-      }
     } catch (_) {}
   }
 
@@ -246,9 +251,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
           style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         content: Text(
-          'On Android/iOS, files are saved to the app\'s secure storage folder to comply with system security policies (Scoped Storage).\n\n'
+          'Files and folders are saved directly to your device\'s public Downloads folder (Downloads/Sendme).\n\n'
           'Current Location:\n${_destController.text}\n\n'
-          'You can access this folder using a File Manager, or share/export files directly from the History tab using the Share button.',
+          'You can open this folder using your File Manager or tap "Open Folder" in the History tab to browse complete nested folder structures.',
           style: GoogleFonts.inter(color: Colors.grey[300], fontSize: 13, height: 1.5),
         ),
         actions: [
@@ -403,6 +408,10 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     });
 
     try {
+      final destDir = Directory(dest);
+      if (!await destDir.exists()) {
+        await destDir.create(recursive: true);
+      }
       final temp = await getTemporaryDirectory();
       _receiveSub = startReceive(
         ticketStr: ticketStr,
@@ -1460,8 +1469,30 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                     ),
                 ],
               ),
+              if (item.status == 'Completed' || item.status == 'Sharing') ...[
+                const SizedBox(width: 6),
+                IconButton(
+                  icon: const Icon(Icons.folder_open_rounded, color: Colors.white70, size: 20),
+                  tooltip: 'Open Folder in File Manager',
+                  onPressed: () async {
+                    try {
+                      final success = await openDownloadFolder();
+                      if (!success && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Saved to: ${item.path}')),
+                        );
+                      }
+                    } catch (_) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Saved to: ${item.path}')),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ],
               if (!item.isSend && item.status == 'Completed') ...[
-                const SizedBox(width: 8),
                 IconButton(
                   icon: const Icon(Icons.share_rounded, color: Colors.white70, size: 20),
                   tooltip: 'Share File',
