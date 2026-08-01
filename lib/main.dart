@@ -7,7 +7,6 @@ import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:downloadsfolder/downloadsfolder.dart' hide Context;
 
 import 'package:my_app/src/rust/api/sendme.dart';
 import 'package:my_app/src/rust/api/simple.dart';
@@ -130,19 +129,20 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   Future<void> _initializeDefaultPaths() async {
     try {
-      Directory? downloadsDir;
-      try {
-        downloadsDir = await getDownloadDirectory();
-      } catch (_) {}
-
       String sendmePath;
-      if (downloadsDir != null) {
-        sendmePath = '${downloadsDir.path}/Sendme';
-      } else if (Platform.isAndroid) {
-        final extDir = await getExternalStorageDirectory();
-        sendmePath = '${extDir?.path ?? (await getApplicationDocumentsDirectory()).path}/Sendme';
-      } else {
+      if (Platform.isAndroid) {
+        final pubDownload = Directory('/storage/emulated/0/Download');
+        if (await pubDownload.exists()) {
+          sendmePath = '/storage/emulated/0/Download/Sendme';
+        } else {
+          final extDir = await getExternalStorageDirectory();
+          sendmePath = '${extDir?.path ?? (await getApplicationDocumentsDirectory()).path}/Sendme';
+        }
+      } else if (Platform.isIOS) {
         sendmePath = '${(await getApplicationDocumentsDirectory()).path}/Sendme';
+      } else {
+        final downloads = await getDownloadsDirectory();
+        sendmePath = '${(downloads ?? await getApplicationDocumentsDirectory()).path}/Sendme';
       }
 
       final dir = Directory(sendmePath);
@@ -1473,22 +1473,11 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                 const SizedBox(width: 6),
                 IconButton(
                   icon: const Icon(Icons.folder_open_rounded, color: Colors.white70, size: 20),
-                  tooltip: 'Open Folder in File Manager',
-                  onPressed: () async {
-                    try {
-                      final success = await openDownloadFolder();
-                      if (!success && mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Saved to: ${item.path}')),
-                        );
-                      }
-                    } catch (_) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Saved to: ${item.path}')),
-                        );
-                      }
-                    }
+                  tooltip: 'Show Folder Path',
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Saved to: ${item.path}')),
+                    );
                   },
                 ),
               ],
