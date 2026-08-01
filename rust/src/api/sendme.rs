@@ -434,6 +434,7 @@ async fn import_with_progress(
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
+    anyhow::ensure!(path != Path::new("/"), "Cannot share root directory '/'");
     let root = path.parent().unwrap_or_else(|| Path::new("/"));
 
     // Collect all files to import
@@ -444,11 +445,23 @@ async fn import_with_progress(
         files.push((name, path.clone()));
     } else {
         for entry in walkdir::WalkDir::new(&path) {
-            let entry = entry?;
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    warn!("Skipping unreadable entry during import: {}", err);
+                    continue;
+                }
+            };
             if entry.file_type().is_file() {
                 let p = entry.into_path();
-                let relative = p.strip_prefix(root)?;
-                let name = canonicalized_path_to_string(relative, true)?;
+                let relative = match p.strip_prefix(root) {
+                    Ok(rel) => rel,
+                    Err(_) => continue,
+                };
+                let name = match canonicalized_path_to_string(relative, true) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
                 files.push((name, p));
             }
         }

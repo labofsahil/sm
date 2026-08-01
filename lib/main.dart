@@ -207,6 +207,12 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     try {
       final path = await FilePicker.platform.getDirectoryPath();
       if (path != null) {
+        if (path == '/' || path.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cannot share root directory. Please select a specific folder.')),
+          );
+          return;
+        }
         setState(() {
           _sendPath = path;
           _sendError = null;
@@ -270,7 +276,12 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   }
 
   Future<void> _startSharing() async {
-    if (_sendPath == null) return;
+    if (_sendPath == null || _sendPath == '/') {
+      setState(() {
+        _sendError = 'Cannot share root directory. Please select a valid file or folder.';
+      });
+      return;
+    }
     
     setState(() {
       _isSending = true;
