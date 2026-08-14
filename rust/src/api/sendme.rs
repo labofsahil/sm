@@ -439,6 +439,7 @@ async fn import_with_progress(
 
     // Collect all files to import
     let mut files = Vec::new();
+    let mut walk_error = None;
     if path.is_file() {
         let relative = path.strip_prefix(root)?;
         let name = canonicalized_path_to_string(relative, true)?;
@@ -449,6 +450,9 @@ async fn import_with_progress(
                 Ok(e) => e,
                 Err(err) => {
                     warn!("Skipping unreadable entry during import: {}", err);
+                    if walk_error.is_none() {
+                        walk_error = Some(err.to_string());
+                    }
                     continue;
                 }
             };
@@ -467,7 +471,13 @@ async fn import_with_progress(
         }
     }
 
-    anyhow::ensure!(!files.is_empty(), "no files found to import");
+    if files.is_empty() {
+        if let Some(err) = walk_error {
+            anyhow::bail!("Cannot read folder '{}': {}. On Android, ensure All Files Access permission is enabled in Settings.", path.display(), err);
+        } else {
+            anyhow::bail!("Folder '{}' contains no files to share.", path.display());
+        }
+    }
 
     let mut names_and_tags = Vec::new();
 
