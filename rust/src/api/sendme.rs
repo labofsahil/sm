@@ -432,49 +432,70 @@ async fn import_with_progress(
     db: &FsStore,
     reporter: &impl SendProgressReporter,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
-    let path = path.canonicalize()?;
-    anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
+    info!("[SEND] import_with_progress: target path={}", path.display());
+    anyhow::ensure!(path.exists(), "path '{}' does not exist", path.display());
     anyhow::ensure!(path != Path::new("/"), "Cannot share root directory '/'");
+
+    let is_dir = path.is_dir();
+    let is_file = path.is_file();
+    info!("[SEND] path metadata: is_dir={}, is_file={}", is_dir, is_file);
+
     let root = path.parent().unwrap_or_else(|| Path::new("/"));
+    info!("[SEND] base root for relative paths: {}", root.display());
 
     // Collect all files to import
     let mut files = Vec::new();
     let mut walk_error = None;
-    if path.is_file() {
+    if is_file {
         let relative = path.strip_prefix(root)?;
         let name = canonicalized_path_to_string(relative, true)?;
+        info!("[SEND] Single file to import: name='{}', path='{}'", name, path.display());
         files.push((name, path.clone()));
     } else {
+        info!("[SEND] Walking directory: {}", path.display());
         for entry in walkdir::WalkDir::new(&path) {
-            let entry = match entry {
-                Ok(e) => e,
+            match entry {
+                Ok(e) => {
+                    let entry_is_file = e.file_type().is_file();
+                    debug!("[SEND] Walkdir discovered: path='{}', is_file={}", e.path().display(), entry_is_file);
+                    if entry_is_file {
+                        let p = e.into_path();
+                        match p.strip_prefix(root) {
+                            Ok(rel) => {
+                                match canonicalized_path_to_string(rel, true) {
+                                    Ok(name) => {
+                                        info!("[SEND] Adding file to import collection: name='{}', path='{}'", name, p.display());
+                                        files.push((name, p));
+                                    }
+                                    Err(err) => {
+                                        warn!("[SEND] Skipping file '{}': invalid relative path name: {}", rel.display(), err);
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                warn!("[SEND] Skipping file '{}': failed to strip prefix '{}': {}", p.display(), root.display(), err);
+                            }
+                        }
+                    }
+                }
                 Err(err) => {
-                    warn!("Skipping unreadable entry during import: {}", err);
+                    warn!("[SEND] Walkdir error on entry in '{}': {}", path.display(), err);
                     if walk_error.is_none() {
                         walk_error = Some(err.to_string());
                     }
-                    continue;
                 }
-            };
-            if entry.file_type().is_file() {
-                let p = entry.into_path();
-                let relative = match p.strip_prefix(root) {
-                    Ok(rel) => rel,
-                    Err(_) => continue,
-                };
-                let name = match canonicalized_path_to_string(relative, true) {
-                    Ok(n) => n,
-                    Err(_) => continue,
-                };
-                files.push((name, p));
             }
         }
     }
 
+    info!("[SEND] Total files collected for import: {}", files.len());
+
     if files.is_empty() {
         if let Some(err) = walk_error {
+            error!("[SEND] Import aborted: walkdir encountered error: {}", err);
             anyhow::bail!("Cannot read folder '{}': {}. On Android, ensure All Files Access permission is enabled in Settings.", path.display(), err);
         } else {
+            error!("[SEND] Import aborted: 0 files collected in '{}'", path.display());
             anyhow::bail!("Folder '{}' contains no files to share.", path.display());
         }
     }
