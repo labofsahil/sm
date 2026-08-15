@@ -2,7 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:path_provider/path_provider.dart';
-import 'storage_service.dart';
+import '../services/storage_service.dart';
+import '../theme/app_theme.dart';
 
 class FolderPickerModal extends StatefulWidget {
   final String? initialPath;
@@ -66,9 +67,11 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
 
     String startPath = widget.initialPath ?? '';
     if (startPath.isEmpty || !await Directory(startPath).exists()) {
-      if (Platform.isAndroid && await Directory('/storage/emulated/0/Download').exists()) {
+      if (Platform.isAndroid &&
+          await Directory('/storage/emulated/0/Download').exists()) {
         startPath = '/storage/emulated/0/Download';
-      } else if (Platform.isAndroid && await Directory('/storage/emulated/0').exists()) {
+      } else if (Platform.isAndroid &&
+          await Directory('/storage/emulated/0').exists()) {
         startPath = '/storage/emulated/0';
       } else {
         final appDoc = await getApplicationDocumentsDirectory();
@@ -163,10 +166,10 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
     return Container(
       height: MediaQuery.of(context).size.height * 0.85,
       decoration: const BoxDecoration(
-        color: Color(0xFF101014),
+        color: AppTheme.surfaceDark,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         border: Border(
-          top: BorderSide(color: Color(0xFF2E2E38), width: 1.5),
+          top: BorderSide(color: AppTheme.borderSubtle, width: 1.5),
         ),
       ),
       child: Column(
@@ -193,10 +196,14 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                    color: AppTheme.primary.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.folder_open_rounded, color: Color(0xFF818CF8), size: 22),
+                  child: const Icon(
+                    Icons.folder_open_rounded,
+                    color: AppTheme.primaryLight,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -235,13 +242,19 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
               margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                color: AppTheme.warningColor.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
+                border: Border.all(
+                  color: AppTheme.warningColor.withValues(alpha: 0.3),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B), size: 20),
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    color: AppTheme.warningColor,
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -252,10 +265,16 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                   TextButton(
                     onPressed: _requestPermission,
                     style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFFF59E0B),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      foregroundColor: AppTheme.warningColor,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                     ),
-                    child: const Text('Grant', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'Grant',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ),
                 ],
               ),
@@ -277,18 +296,20 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                   avatar: Icon(
                     isSelected ? Icons.folder_rounded : Icons.folder_outlined,
                     size: 16,
-                    color: isSelected ? Colors.white : const Color(0xFF818CF8),
+                    color: isSelected ? Colors.white : AppTheme.primaryLight,
                   ),
                   backgroundColor: isSelected
-                      ? const Color(0xFF6366F1)
-                      : const Color(0xFF1E1E26),
+                      ? AppTheme.primary
+                      : AppTheme.borderSubtle,
                   labelStyle: GoogleFonts.inter(
                     fontSize: 12,
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                     color: isSelected ? Colors.white : Colors.grey[300],
                   ),
                   side: BorderSide(
-                    color: isSelected ? const Color(0xFF818CF8) : const Color(0xFF2E2E3A),
+                    color: isSelected
+                        ? AppTheme.primaryLight
+                        : AppTheme.border,
                   ),
                   onPressed: () {
                     final target = Directory(shortcut['path']!);
@@ -306,16 +327,18 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
             margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xFF16161C),
+              color: AppTheme.surfaceElevated,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF282834)),
+              border: Border.all(color: AppTheme.border),
             ),
             child: Row(
               children: [
                 IconButton(
-                  onPressed: _currentDir.parent.path != _currentDir.path ? _navigateUp : null,
+                  onPressed: _currentDir.parent.path != _currentDir.path
+                      ? _navigateUp
+                      : null,
                   icon: const Icon(Icons.arrow_upward_rounded, size: 20),
-                  color: const Color(0xFF818CF8),
+                  color: AppTheme.primaryLight,
                   disabledColor: Colors.grey[700],
                   tooltip: 'Go to parent folder',
                   padding: EdgeInsets.zero,
@@ -342,7 +365,7 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
             child: _isLoading
                 ? const Center(
                     child: CircularProgressIndicator(
-                      color: Color(0xFF6366F1),
+                      color: AppTheme.primary,
                     ),
                   )
                 : _errorMessage != null
@@ -352,20 +375,30 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.folder_off_rounded, color: Color(0xFFEF4444), size: 40),
+                              const Icon(
+                                Icons.folder_off_rounded,
+                                color: AppTheme.errorColor,
+                                size: 40,
+                              ),
                               const SizedBox(height: 12),
                               Text(
                                 _errorMessage!,
                                 textAlign: TextAlign.center,
-                                style: GoogleFonts.inter(color: Colors.grey[400], fontSize: 13),
+                                style: GoogleFonts.inter(
+                                  color: Colors.grey[400],
+                                  fontSize: 13,
+                                ),
                               ),
                               const SizedBox(height: 16),
                               ElevatedButton.icon(
                                 onPressed: _requestPermission,
-                                icon: const Icon(Icons.security_rounded, size: 16),
+                                icon: const Icon(
+                                  Icons.security_rounded,
+                                  size: 16,
+                                ),
                                 label: const Text('Check Permissions'),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF6366F1),
+                                  backgroundColor: AppTheme.primary,
                                   foregroundColor: Colors.white,
                                 ),
                               ),
@@ -378,40 +411,63 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.folder_open_rounded, color: Colors.grey[700], size: 48),
+                                Icon(
+                                  Icons.folder_open_rounded,
+                                  color: Colors.grey[700],
+                                  size: 48,
+                                ),
                                 const SizedBox(height: 12),
                                 Text(
                                   'This folder is empty',
-                                  style: GoogleFonts.inter(color: Colors.grey[500], fontSize: 14),
+                                  style: GoogleFonts.inter(
+                                    color: Colors.grey[500],
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ],
                             ),
                           )
                         : ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 8,
+                            ),
                             itemCount: _entries.length,
                             itemBuilder: (context, index) {
                               final entity = _entries[index];
                               final isDir = entity is Directory;
-                              final name = entity.path.split(Platform.pathSeparator).last;
+                              final name = entity.path
+                                  .split(Platform.pathSeparator)
+                                  .last;
 
                               return InkWell(
-                                onTap: isDir ? () => _navigateTo(entity) : null,
+                                onTap:
+                                    isDir ? () => _navigateTo(entity) : null,
                                 borderRadius: BorderRadius.circular(10),
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  margin: const EdgeInsets.symmetric(vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  margin: const EdgeInsets.symmetric(
+                                    vertical: 2,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: isDir
-                                        ? const Color(0xFF1E1E26).withValues(alpha: 0.4)
+                                        ? AppTheme.borderSubtle
+                                            .withValues(alpha: 0.4)
                                         : Colors.transparent,
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                   child: Row(
                                     children: [
                                       Icon(
-                                        isDir ? Icons.folder_rounded : Icons.insert_drive_file_outlined,
-                                        color: isDir ? const Color(0xFF818CF8) : Colors.grey[500],
+                                        isDir
+                                            ? Icons.folder_rounded
+                                            : Icons.insert_drive_file_outlined,
+                                        color: isDir
+                                            ? AppTheme.primaryLight
+                                            : Colors.grey[500],
                                         size: 22,
                                       ),
                                       const SizedBox(width: 14),
@@ -420,23 +476,36 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                                           name,
                                           style: GoogleFonts.inter(
                                             fontSize: 14,
-                                            fontWeight: isDir ? FontWeight.w600 : FontWeight.normal,
-                                            color: isDir ? Colors.white : Colors.grey[400],
+                                            fontWeight: isDir
+                                                ? FontWeight.w600
+                                                : FontWeight.normal,
+                                            color: isDir
+                                                ? Colors.white
+                                                : Colors.grey[400],
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
                                       if (isDir)
-                                        const Icon(Icons.chevron_right_rounded, color: Colors.grey, size: 20)
+                                        const Icon(
+                                          Icons.chevron_right_rounded,
+                                          color: Colors.grey,
+                                          size: 20,
+                                        )
                                       else
                                         FutureBuilder<FileStat>(
                                           future: entity.stat(),
                                           builder: (context, snapshot) {
                                             if (snapshot.hasData) {
                                               return Text(
-                                                _formatFileSize(snapshot.data!.size),
-                                                style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[600]),
+                                                _formatFileSize(
+                                                  snapshot.data!.size,
+                                                ),
+                                                style: GoogleFonts.inter(
+                                                  fontSize: 11,
+                                                  color: Colors.grey[600],
+                                                ),
                                               );
                                             }
                                             return const SizedBox.shrink();
@@ -454,8 +523,8 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: const BoxDecoration(
-              color: Color(0xFF141418),
-              border: Border(top: BorderSide(color: Color(0xFF24242E))),
+              color: AppTheme.surface,
+              border: Border(top: BorderSide(color: AppTheme.borderSubtle)),
             ),
             child: Row(
               children: [
@@ -469,7 +538,7 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                         style: GoogleFonts.outfit(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: const Color(0xFF818CF8),
+                          color: AppTheme.primaryLight,
                           letterSpacing: 1.2,
                         ),
                       ),
@@ -495,11 +564,16 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                   icon: const Icon(Icons.check_rounded, size: 18),
                   label: const Text('Select Folder'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF6366F1),
+                    backgroundColor: AppTheme.primary,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: Colors.grey[800],
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
                 ),
               ],

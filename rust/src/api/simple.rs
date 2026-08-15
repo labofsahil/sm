@@ -1,40 +1,66 @@
+//! Simple utilities, initialization routines, and in-memory log streaming for Flutter.
+
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::VecDeque;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// Maximum number of log lines retained in the in-memory circular ring buffer.
 const MAX_LOG_LINES: usize = 500;
+
+/// Global circular buffer for capturing application logs to stream into the Flutter debug view.
 static LOG_BUFFER: Lazy<RwLock<VecDeque<String>>> =
     Lazy::new(|| RwLock::new(VecDeque::with_capacity(MAX_LOG_LINES)));
 
+/// A tracing layer that captures structured log events and appends them to `LOG_BUFFER`.
 struct RingBufferLayer;
+
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RingBufferLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let meta = event.metadata();
         let mut visitor = StringVisitor(String::new());
         event.record(&mut visitor);
         let line = format!("[{}][{}] {}", meta.level(), meta.target(), visitor.0);
         let mut buf = LOG_BUFFER.write();
-        if buf.len() >= MAX_LOG_LINES { buf.pop_front(); }
+        if buf.len() >= MAX_LOG_LINES {
+            buf.pop_front();
+        }
         buf.push_back(line);
     }
 }
 
+/// Visitor that formats tracing fields into a single string.
 struct StringVisitor(String);
+
 impl tracing::field::Visit for StringVisitor {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" { self.0.push_str(value); }
-        else { self.0.push_str(&format!(" {}={}", field.name(), value)); }
+        if field.name() == "message" {
+            self.0.push_str(value);
+        } else {
+            self.0.push_str(&format!(" {}={}", field.name(), value));
+        }
     }
+
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" { self.0.push_str(&format!("{:?}", value)); }
-        else { self.0.push_str(&format!(" {}={:?}", field.name(), value)); }
+        if field.name() == "message" {
+            self.0.push_str(&format!("{:?}", value));
+        } else {
+            self.0.push_str(&format!(" {}={:?}", field.name(), value));
+        }
     }
 }
 
+/// Simple synchronous health check / greeting method.
 #[flutter_rust_bridge::frb(sync)]
-pub fn greet(name: String) -> String { format!("Hello, {name}!") }
+pub fn greet(name: String) -> String {
+    format!("Hello, {name}!")
+}
 
+/// Initializes logging and default utilities for Flutter Rust Bridge.
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
