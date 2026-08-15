@@ -432,6 +432,15 @@ async fn import_with_progress(
     db: &FsStore,
     reporter: &impl SendProgressReporter,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
+    // Normalize path by trimming trailing slashes if not root
+    let path_str = path.to_string_lossy();
+    let trimmed_path_str = if path_str.len() > 1 && (path_str.ends_with('/') || path_str.ends_with('\\')) {
+        path_str.trim_end_matches(['/', '\\']).to_string()
+    } else {
+        path_str.to_string()
+    };
+    let path = PathBuf::from(trimmed_path_str);
+
     info!("[SEND] import_with_progress: target path={}", path.display());
     anyhow::ensure!(path.exists(), "path '{}' does not exist", path.display());
     anyhow::ensure!(path != Path::new("/"), "Cannot share root directory '/'");
@@ -442,6 +451,7 @@ async fn import_with_progress(
 
     let root = path.parent().unwrap_or_else(|| Path::new("/"));
     info!("[SEND] base root for relative paths: {}", root.display());
+
 
     // Collect all files to import
     let mut files = Vec::new();
@@ -683,6 +693,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    static TEST_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
     struct TestSendReporter {
         events: Arc<Mutex<Vec<SendProgress>>>,
     }
@@ -705,9 +717,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_receive_local() -> anyhow::Result<()> {
+        let _guard = TEST_LOCK.lock().await;
         // Create a temporary directory structure for the test
         let temp_base = std::env::temp_dir().join(format!("sendme-test-{}", rand::random::<u32>()));
         tokio::fs::create_dir_all(&temp_base).await?;
+
 
         let source_dir = temp_base.join("source");
         let temp_dir = temp_base.join("temp");
@@ -784,6 +798,88 @@ mod tests {
         stop_send()?;
 
         // Clean up filesystem
+        tokio::fs::remove_dir_all(&temp_base).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_send_receive_folder_local() -> anyhow::Result<()> {
+        let _guard = TEST_LOCK.lock().await;
+        let temp_base = std::env::temp_dir().join(format!("sendme-folder-test-{}", rand::random::<u32>()));
+        tokio::fs::create_dir_all(&temp_base).await?;
+
+        let source_root = temp_base.join("source");
+        let shared_folder = source_root.join("my_shared_project");
+        let sub_folder = shared_folder.join("nested").join("docs");
+        let temp_dir = temp_base.join("temp");
+        let dest_dir = temp_base.join("dest");
+
+        tokio::fs::create_dir_all(&sub_folder).await?;
+        tokio::fs::create_dir_all(&temp_dir).await?;
+        tokio::fs::create_dir_all(&dest_dir).await?;
+
+        // Create multiple nested test files
+        let file1_path = shared_folder.join("readme.md");
+        let file1_content = b"# Shared Project\nThis is a root folder file.";
+        tokio::fs::write(&file1_path, file1_content).await?;
+
+        let file2_path = sub_folder.join("config.json");
+        let file2_content = br#"{"status": "ok", "nested": true}"#;
+        tokio::fs::write(&file2_path, file2_content).await?;
+
+        let send_events = Arc::new(Mutex::new(Vec::new()));
+        let send_reporter = TestSendReporter {
+            events: send_events.clone(),
+        };
+
+        // Test sending with a trailing slash to test path normalization
+        let send_path_str = format!("{}/", shared_folder.to_string_lossy());
+        start_send_inner(
+            send_path_str,
+            temp_dir.to_string_lossy().to_string(),
+            &send_reporter,
+        )
+        .await?;
+
+        let mut ticket_str = String::new();
+        {
+            let events = send_events.lock().unwrap();
+            for event in events.iter() {
+                if let SendProgress::Sharing { ticket } = event {
+                    ticket_str = ticket.clone();
+                }
+            }
+        }
+        assert!(!ticket_str.is_empty(), "Ticket should not be empty");
+
+        let receive_events = Arc::new(Mutex::new(Vec::new()));
+        let receive_reporter = TestReceiveReporter {
+            events: receive_events.clone(),
+        };
+
+        start_receive_inner(
+            ticket_str,
+            temp_dir.to_string_lossy().to_string(),
+            dest_dir.to_string_lossy().to_string(),
+            &receive_reporter,
+        )
+        .await?;
+
+        // Verify that the folder hierarchy was recreated in dest_dir
+        let received_file1 = dest_dir.join("my_shared_project").join("readme.md");
+        let received_file2 = dest_dir.join("my_shared_project").join("nested").join("docs").join("config.json");
+
+        assert!(received_file1.exists(), "Received file1 should exist at {}", received_file1.display());
+        assert!(received_file2.exists(), "Received file2 should exist at {}", received_file2.display());
+
+        let read_content1 = tokio::fs::read(&received_file1).await?;
+        let read_content2 = tokio::fs::read(&received_file2).await?;
+
+        assert_eq!(read_content1, file1_content);
+        assert_eq!(read_content2, file2_content);
+
+        stop_send()?;
         tokio::fs::remove_dir_all(&temp_base).await?;
 
         Ok(())

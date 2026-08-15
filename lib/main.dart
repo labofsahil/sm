@@ -11,6 +11,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:my_app/src/rust/api/sendme.dart';
 import 'package:my_app/src/rust/api/simple.dart';
 import 'package:my_app/src/rust/frb_generated.dart';
+import 'package:my_app/src/storage_service.dart';
+import 'package:my_app/src/folder_picker_modal.dart';
 
 const Color emeraldColor = Color(0xFF10B981);
 const Color emeraldAccentColor = Color(0xFF34D399);
@@ -73,9 +75,10 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  
+
   // Send state
   String? _sendPath;
+  FolderStats? _folderStats;
   bool _isSending = false;
   bool _isImporting = false;
   String? _sendTicket;
@@ -150,9 +153,11 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
         await dir.create(recursive: true);
       }
 
-      setState(() {
-        _destController.text = sendmePath;
-      });
+      if (mounted) {
+        setState(() {
+          _destController.text = sendmePath;
+        });
+      }
     } catch (_) {}
   }
 
@@ -193,6 +198,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       if (result != null && result.files.single.path != null) {
         setState(() {
           _sendPath = result.files.single.path;
+          _folderStats = null;
           _sendError = null;
         });
       }
@@ -205,16 +211,60 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   Future<void> _pickSendFolder() async {
     try {
-      final path = await FilePicker.platform.getDirectoryPath();
-      if (path != null) {
-        if (path == '/' || path.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot share root directory. Please select a specific folder.')),
+      if (Platform.isAndroid) {
+        final hasPermission = await StorageService.checkStoragePermission();
+        if (!hasPermission && mounted) {
+          final proceed = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF141418),
+              title: Text(
+                'Storage Permission Required',
+                style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              content: Text(
+                'Sendme requires All Files Access to share entire directories and their contents over P2P.\n\nPlease enable permission in Settings.',
+                style: GoogleFonts.inter(color: Colors.grey[300], fontSize: 13, height: 1.5),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx, true);
+                    StorageService.requestStoragePermission();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6366F1),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
           );
+          if (proceed != true) return;
+        }
+      }
+
+      if (!mounted) return;
+      final selectedPath = await FolderPickerModal.show(context, initialPath: _sendPath);
+      if (selectedPath != null && selectedPath.isNotEmpty) {
+        if (selectedPath == '/' || selectedPath == '\\') {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Cannot share root directory. Please select a specific folder.')),
+            );
+          }
           return;
         }
+
+        final stats = await StorageService.inspectFolder(selectedPath);
         setState(() {
-          _sendPath = path;
+          _sendPath = selectedPath;
+          _folderStats = stats;
           _sendError = null;
         });
       }
@@ -227,23 +277,26 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
 
   Future<void> _pickDestFolder() async {
     try {
-      final path = await FilePicker.platform.getDirectoryPath();
-      if (path != null) {
-        if (path == '/') {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot use root directory. Please use the default downloads folder.')),
-          );
-          _initializeDefaultPaths();
+      final selectedPath = await FolderPickerModal.show(context, initialPath: _destController.text);
+      if (selectedPath != null && selectedPath.isNotEmpty) {
+        if (selectedPath == '/' || selectedPath == '\\') {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Cannot use root directory. Please select a specific folder.')),
+            );
+          }
           return;
         }
         setState(() {
-          _destController.text = path;
+          _destController.text = selectedPath;
         });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error picking folder: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error picking folder: $e')),
+        );
+      }
     }
   }
 
@@ -276,13 +329,13 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   }
 
   Future<void> _startSharing() async {
-    if (_sendPath == null || _sendPath == '/') {
+    if (_sendPath == null || _sendPath == '/' || _sendPath == '\\') {
       setState(() {
         _sendError = 'Cannot share root directory. Please select a valid file or folder.';
       });
       return;
     }
-    
+
     setState(() {
       _isSending = true;
       _isImporting = true;
@@ -324,7 +377,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               _sendTicket = ticket;
               _sendStatus = 'Active & Available';
               _sendProgress = 1.0;
-              
+
               final existingIndex = _history.indexWhere((item) => item.ticket == ticket);
               if (existingIndex == -1) {
                 _history.insert(
@@ -374,7 +427,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     try {
       await stopSend();
     } catch (_) {}
-    
+
     setState(() {
       if (_sendTicket != null) {
         final index = _history.indexWhere((item) => item.ticket == _sendTicket);
@@ -466,11 +519,14 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             });
           },
           finished: (totalFiles, totalBytes, exportedPaths) {
+            if (exportedPaths.isNotEmpty) {
+              StorageService.scanFiles(exportedPaths);
+            }
             setState(() {
               _isReceiving = false;
               _receiveStatus = 'Success! Saved to $dest';
               _receiveProgress = 1.0;
-              
+
               _history.insert(
                 0,
                 TransferItem(
@@ -558,8 +614,12 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   }
 
   void _shareTicket(String text) {
+    // ignore: deprecated_member_use
     Share.share(text, subject: 'Sendme P2P Ticket');
   }
+
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -616,7 +676,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                   borderRadius: BorderRadius.circular(14),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF6366F1).withOpacity(0.3),
+                      color: const Color(0xFF6366F1).withValues(alpha: 0.3),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
                     ),
@@ -658,9 +718,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               ? Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: emeraldColor.withOpacity(0.12),
+                    color: emeraldColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(30),
-                    border: Border.all(color: emeraldColor.withOpacity(0.3)),
+                    border: Border.all(color: emeraldColor.withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -681,9 +741,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               : Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.08),
+                    color: Colors.grey.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(30),
-                    border: Border.all(color: Colors.grey.withOpacity(0.2)),
+                    border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -731,7 +791,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF4F46E5).withOpacity(0.2),
+              color: const Color(0xFF4F46E5).withValues(alpha: 0.2),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
@@ -822,7 +882,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFF6366F1).withOpacity(0.08),
+                color: const Color(0xFF6366F1).withValues(alpha: 0.08),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
@@ -866,8 +926,11 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   }
 
   Widget _buildFileDetailCard() {
-    final name = _sendPath!.split('/').last;
-    final isFolder = !name.contains('.');
+    final name = _sendPath!.split(Platform.pathSeparator).last.isEmpty
+        ? _sendPath!
+        : _sendPath!.split(Platform.pathSeparator).last;
+    final isFolder = Directory(_sendPath!).existsSync() || _folderStats != null;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -880,13 +943,15 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.03),
+              color: isFolder
+                  ? const Color(0xFF6366F1).withValues(alpha: 0.1)
+                  : const Color(0xFF06B6D4).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
               isFolder ? Icons.folder_rounded : Icons.insert_drive_file_rounded,
-              color: const Color(0xFF06B6D4),
-              size: 24,
+              color: isFolder ? const Color(0xFF818CF8) : const Color(0xFF06B6D4),
+              size: 26,
             ),
           ),
           const SizedBox(width: 16),
@@ -899,7 +964,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                   style: GoogleFonts.inter(
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
-                    fontSize: 14,
+                    fontSize: 15,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -907,13 +972,31 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                 const SizedBox(height: 4),
                 Text(
                   _sendPath!,
-                  style: GoogleFonts.inter(
+                  style: GoogleFonts.robotoMono(
                     fontSize: 11,
                     color: Colors.grey[500],
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (_folderStats != null) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${_folderStats!.fileCount} ${_folderStats!.fileCount == 1 ? "file" : "files"} • ${_formatBytes(_folderStats!.totalBytes)}',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFFA5B4FC),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -921,6 +1004,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             onPressed: () {
               setState(() {
                 _sendPath = null;
+                _folderStats = null;
                 _sendError = null;
               });
             },
@@ -932,7 +1016,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
   }
 
   Widget _buildActiveSendCard() {
-    final fileName = _sendPath?.split('/').last ?? 'File';
+    final fileName = _sendPath?.split(Platform.pathSeparator).last ?? 'File';
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -941,7 +1025,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
         border: Border.all(color: const Color(0xFF24242A)),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF6366F1).withOpacity(0.03),
+            color: const Color(0xFF6366F1).withValues(alpha: 0.03),
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
@@ -991,7 +1075,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             ],
           ),
           const SizedBox(height: 20),
-          Divider(color: const Color(0xFF24242A)),
+          const Divider(color: Color(0xFF24242A)),
           const SizedBox(height: 16),
           Text(
             _sendStatus,
@@ -1073,7 +1157,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             label: const Text('Stop Sharing'),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFFEF4444),
-              side: BorderSide(color: const Color(0xFFEF4444).withOpacity(0.4)),
+              side: BorderSide(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
@@ -1138,7 +1222,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
         border: Border.all(color: const Color(0xFF24242A)),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF06B6D4).withOpacity(0.02),
+            color: const Color(0xFF06B6D4).withValues(alpha: 0.02),
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
@@ -1181,7 +1265,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             ],
           ),
           const SizedBox(height: 20),
-          Divider(color: const Color(0xFF24242A)),
+          const Divider(color: Color(0xFF24242A)),
           const SizedBox(height: 16),
           Text(
             _receiveStatus,
@@ -1208,7 +1292,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             label: const Text('Cancel Download'),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFFEF4444),
-              side: BorderSide(color: const Color(0xFFEF4444).withOpacity(0.4)),
+              side: BorderSide(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
@@ -1263,7 +1347,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               controller: _destController,
               readOnly: Platform.isAndroid || Platform.isIOS,
               style: GoogleFonts.inter(
-                  color: (Platform.isAndroid || Platform.isIOS) ? Colors.grey[400] : Colors.white, 
+                  color: (Platform.isAndroid || Platform.isIOS) ? Colors.grey[400] : Colors.white,
                   fontSize: 14),
               decoration: InputDecoration(
                 border: InputBorder.none,
@@ -1273,13 +1357,14 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
             ),
           ),
           IconButton(
-            onPressed: (Platform.isAndroid || Platform.isIOS) ? _showStorageInfoDialog : _pickDestFolder,
-            icon: Icon(
-              (Platform.isAndroid || Platform.isIOS) ? Icons.info_outline_rounded : Icons.folder_copy_rounded, 
-              color: Colors.grey, 
-              size: 20,
-            ),
-            tooltip: (Platform.isAndroid || Platform.isIOS) ? 'Storage Info' : 'Browse',
+            onPressed: _pickDestFolder,
+            icon: const Icon(Icons.folder_copy_rounded, color: Colors.grey, size: 20),
+            tooltip: 'Browse Folder',
+          ),
+          IconButton(
+            onPressed: _showStorageInfoDialog,
+            icon: const Icon(Icons.info_outline_rounded, color: Colors.grey, size: 20),
+            tooltip: 'Storage Info',
           ),
         ],
       ),
@@ -1300,7 +1385,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF4F46E5).withOpacity(0.25),
+            color: const Color(0xFF4F46E5).withValues(alpha: 0.25),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -1330,9 +1415,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFEF4444).withOpacity(0.08),
+        color: const Color(0xFFEF4444).withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.3)),
+        border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.3)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1393,7 +1478,7 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       itemCount: _history.length,
       itemBuilder: (context, index) {
         final item = _history[index];
-        final fileName = item.path.split('/').last;
+        final fileName = item.path.split(Platform.pathSeparator).last;
         return Container(
           margin: const EdgeInsets.only(bottom: 16),
           padding: const EdgeInsets.all(16),
@@ -1407,9 +1492,9 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: item.isSend 
-                      ? const Color(0xFF6366F1).withOpacity(0.08)
-                      : const Color(0xFF06B6D4).withOpacity(0.08),
+                  color: item.isSend
+                      ? const Color(0xFF6366F1).withValues(alpha: 0.08)
+                      : const Color(0xFF06B6D4).withValues(alpha: 0.08),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -1454,8 +1539,8 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                       color: item.status == 'Sharing' || item.status == 'Completed'
-                          ? emeraldColor.withOpacity(0.1)
-                          : Colors.grey.withOpacity(0.1),
+                          ? emeraldColor.withValues(alpha: 0.1)
+                          : Colors.grey.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
@@ -1484,11 +1569,14 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                 const SizedBox(width: 6),
                 IconButton(
                   icon: const Icon(Icons.folder_open_rounded, color: Colors.white70, size: 20),
-                  tooltip: 'Show Folder Path',
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Saved to: ${item.path}')),
-                    );
+                  tooltip: 'Open Folder',
+                  onPressed: () async {
+                    final opened = await StorageService.openFolder(item.path);
+                    if (!opened && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Saved to: ${item.path}')),
+                      );
+                    }
                   },
                 ),
               ],
@@ -1498,13 +1586,24 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                   tooltip: 'Share File',
                   onPressed: () {
                     if (item.files.isNotEmpty) {
-                      Share.shareXFiles(item.files.map((f) => XFile(f)).toList());
+                      // ignore: deprecated_member_use
+                      Share.shareXFiles(
+                        item.files.map((f) => XFile(f)).toList(),
+                        subject: 'Shared from Sendme',
+                      );
                     } else {
-                      Share.shareXFiles([XFile(item.path)]);
+                      // ignore: deprecated_member_use
+                      Share.shareXFiles(
+                        [XFile(item.path)],
+                        subject: 'Shared from Sendme',
+                      );
                     }
                   },
                 ),
               ],
+
+
+
             ],
           ),
         );
@@ -1578,10 +1677,15 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
                     itemBuilder: (ctx, i) {
                       final line = _debugLogs[i];
                       Color lineColor = Colors.grey[400]!;
-                      if (line.contains('[ERROR]') || line.contains('error')) lineColor = const Color(0xFFEF4444);
-                      else if (line.contains('[WARN]') || line.contains('warn')) lineColor = const Color(0xFFF59E0B);
-                      else if (line.contains('[INFO]')) lineColor = const Color(0xFF34D399);
-                      else if (line.contains('[DEBUG]')) lineColor = const Color(0xFF60A5FA);
+                      if (line.contains('[ERROR]') || line.contains('error')) {
+                        lineColor = const Color(0xFFEF4444);
+                      } else if (line.contains('[WARN]') || line.contains('warn')) {
+                        lineColor = const Color(0xFFF59E0B);
+                      } else if (line.contains('[INFO]')) {
+                        lineColor = const Color(0xFF34D399);
+                      } else if (line.contains('[DEBUG]')) {
+                        lineColor = const Color(0xFF60A5FA);
+                      }
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 1),
                         child: Text(line, style: GoogleFonts.robotoMono(color: lineColor, fontSize: 11, height: 1.4)),
@@ -1593,9 +1697,8 @@ class _DashboardPageState extends State<DashboardPage> with SingleTickerProvider
       ],
     );
   }
-
-
 }
+
 class _PulseDot extends StatefulWidget {
   final Color color;
 
@@ -1642,7 +1745,7 @@ class _PulseDotState extends State<_PulseDot> with SingleTickerProviderStateMixi
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: widget.color.withOpacity(0.6),
+                  color: widget.color.withValues(alpha: 0.6),
                   blurRadius: 8,
                   spreadRadius: 2,
                 ),
