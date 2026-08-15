@@ -56,13 +56,14 @@ pub unsafe extern "C" fn Java_com_example_my_1app_MainActivity_initNdkContext(
             let local_obj = unsafe { jni::objects::JObject::from_raw(context) };
             match env_obj.new_global_ref(local_obj) {
                 Ok(global_ref) => {
-                    // Intentionally convert into a raw pointer so it is never dropped/freed
-                    // during the application process lifecycle.
-                    let global_context_raw = global_ref.into_raw();
-                    let context_ptr = global_context_raw as *mut std::ffi::c_void;
+                    // Obtain the raw jobject pointer from the GlobalRef and leak it via
+                    // std::mem::forget so DeleteGlobalRef is never called during the
+                    // application process lifecycle.
+                    let context_ptr = global_ref.as_raw() as *mut std::ffi::c_void;
                     unsafe {
                         ndk_context::initialize_android_context(vm_ptr, context_ptr);
                     }
+                    std::mem::forget(global_ref);
                     tracing::info!("ndk_context initialized successfully with JNI GlobalRef");
                 }
                 Err(err) => {
