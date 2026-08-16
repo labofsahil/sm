@@ -60,35 +60,82 @@ class _DashboardPageState extends State<DashboardPage>
 
   // History state
   final List<TransferItem> _history = [];
+  Future<void>? _historyLoad;
+  Future<void> _historySaveChain = Future.value();
 
   // Debug log state
   final List<String> _debugLogs = [];
   final ScrollController _logsScrollController = ScrollController();
   Timer? _logPollTimer;
+  bool _logPollInFlight = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     _initializeDefaultPaths();
+    _historyLoad = _loadHistory();
 
     // Poll Rust log buffer every second
     _logPollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      final newLogs = await getDebugLogs();
-      if (newLogs.isNotEmpty && mounted) {
-        setState(() {
-          _debugLogs.addAll(newLogs);
-          if (_debugLogs.length > 1000) {
-            _debugLogs.removeRange(0, _debugLogs.length - 1000);
-          }
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_logsScrollController.hasClients) {
-            _logsScrollController.jumpTo(
-              _logsScrollController.position.maxScrollExtent,
-            );
-          }
-        });
+      if (_logPollInFlight) return;
+      _logPollInFlight = true;
+      try {
+        final newLogs = await getDebugLogs();
+        if (newLogs.isNotEmpty && mounted) {
+          setState(() {
+            _debugLogs.addAll(newLogs);
+            if (_debugLogs.length > 1000) {
+              _debugLogs.removeRange(0, _debugLogs.length - 1000);
+            }
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_logsScrollController.hasClients) {
+              _logsScrollController.jumpTo(
+                _logsScrollController.position.maxScrollExtent,
+              );
+            }
+          });
+        }
+      } catch (_) {
+        // A rejected getDebugLogs future must not surface as an unhandled
+        // async error; polling resumes on the next tick.
+      } finally {
+        _logPollInFlight = false;
+      }
+    });
+  }
+
+  Future<void> _loadHistory() async {
+    List<TransferItem> items;
+    try {
+      items = await StorageService.loadHistory();
+    } catch (e) {
+      debugPrint('Failed to load transfer history: $e');
+      return;
+    }
+    if (items.isNotEmpty && mounted) {
+      setState(() => _history.addAll(items));
+    }
+  }
+
+  /// Inserts a history entry after any in-flight load has settled, so the
+  /// load cannot reorder or drop the entry.
+  Future<void> _addHistoryEntry(TransferItem item, {bool dedupe = false}) async {
+    await _historyLoad;
+    if (!mounted) return;
+    if (dedupe && _history.any((h) => h.ticket == item.ticket)) return;
+    setState(() => _history.insert(0, item));
+    _persistHistory();
+  }
+
+  void _persistHistory() {
+    final snapshot = List<TransferItem>.unmodifiable(_history);
+    _historySaveChain = _historySaveChain.then((_) async {
+      try {
+        await StorageService.saveHistory(snapshot);
+      } catch (e) {
+        debugPrint('Failed to save transfer history: $e');
       }
     });
   }
@@ -143,7 +190,7 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _pickSendFile() async {
     try {
       final result = await FilePicker.platform.pickFiles();
-      if (result != null && result.files.single.path != null) {
+      if (result != null && result.files.single.path != null && mounted) {
         setState(() {
           _sendPath = result.files.single.path;
           _folderStats = null;
@@ -151,9 +198,11 @@ class _DashboardPageState extends State<DashboardPage>
         });
       }
     } catch (e) {
-      setState(() {
-        _sendError = 'Error picking file: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _sendError = 'Error picking file: $e';
+        });
+      }
     }
   }
 
@@ -224,17 +273,20 @@ class _DashboardPageState extends State<DashboardPage>
           return;
         }
 
-        final stats = await StorageService.inspectFolder(selectedPath);
-        setState(() {
+      final stats = await StorageService.inspectFolder(selectedPath);
+      if (!mounted) return;
+      setState(() {
           _sendPath = selectedPath;
           _folderStats = stats;
           _sendError = null;
         });
       }
     } catch (e) {
-      setState(() {
-        _sendError = 'Error picking folder: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _sendError = 'Error picking folder: $e';
+        });
+      }
     }
   }
 
@@ -357,24 +409,19 @@ class _DashboardPageState extends State<DashboardPage>
               _sendTicket = ticket;
               _sendStatus = 'Active & Available';
               _sendProgress = 1.0;
-
-              final existingIndex =
-                  _history.indexWhere((item) => item.ticket == ticket);
-              if (existingIndex == -1) {
-                _history.insert(
-                  0,
-                  TransferItem(
-                    isSend: true,
-                    path: _sendPath!,
-                    ticket: ticket,
-                    status: 'Sharing',
-                    size: BigInt.zero,
-                    timestamp: DateTime.now(),
-                    files: [_sendPath!],
-                  ),
-                );
-              }
             });
+            _addHistoryEntry(
+              TransferItem(
+                isSend: true,
+                path: _sendPath!,
+                ticket: ticket,
+                status: 'Sharing',
+                size: BigInt.zero,
+                timestamp: DateTime.now(),
+                files: [_sendPath!],
+              ),
+              dedupe: true,
+            );
           },
           failed: (error) {
             setState(() {
@@ -404,11 +451,13 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _stopSharing() async {
+    await _historyLoad;
     await _sendSub?.cancel();
     try {
       await stopSend();
     } catch (_) {}
 
+    var historyUpdated = false;
     setState(() {
       if (_sendTicket != null) {
         final index =
@@ -416,6 +465,7 @@ class _DashboardPageState extends State<DashboardPage>
         if (index != -1) {
           final old = _history[index];
           _history[index] = old.copyWith(status: 'Stopped');
+          historyUpdated = true;
         }
       }
       _isSending = false;
@@ -424,6 +474,9 @@ class _DashboardPageState extends State<DashboardPage>
       _sendStatus = '';
       _sendProgress = 0.0;
     });
+    if (historyUpdated) {
+      _persistHistory();
+    }
   }
 
   void _startMetricsTimer() {
@@ -547,20 +600,18 @@ class _DashboardPageState extends State<DashboardPage>
               _receiveStatus = 'Success! Saved to $dest';
               _receiveProgress = 1.0;
               _receiveSpeed = null;
-
-              _history.insert(
-                0,
-                TransferItem(
-                  isSend: false,
-                  path: dest,
-                  ticket: ticketStr,
-                  status: 'Completed',
-                  size: totalBytes,
-                  timestamp: DateTime.now(),
-                  files: exportedPaths,
-                ),
-              );
             });
+            _addHistoryEntry(
+              TransferItem(
+                isSend: false,
+                path: dest,
+                ticket: ticketStr,
+                status: 'Completed',
+                size: totalBytes,
+                timestamp: DateTime.now(),
+                files: exportedPaths,
+              ),
+            );
           },
           failed: (error) {
             _stopMetricsTimer();
@@ -699,9 +750,16 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                     HistoryTab(
                       history: _history,
-                      onClearHistory: () => setState(() => _history.clear()),
-                      onDeleteItem: (index) =>
-                          setState(() => _history.removeAt(index)),
+                      onClearHistory: () async {
+                        await _historyLoad;
+                        setState(() => _history.clear());
+                        _persistHistory();
+                      },
+                      onDeleteItem: (index) async {
+                        await _historyLoad;
+                        setState(() => _history.removeAt(index));
+                        _persistHistory();
+                      },
                     ),
                     LogsTab(
                       logs: _debugLogs,

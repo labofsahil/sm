@@ -36,4 +36,24 @@ class TransferItem {
       files: files ?? this.files,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'isSend': isSend,
+        'path': path,
+        'ticket': ticket,
+        'status': status,
+        'size': size.toString(),
+        'timestamp': timestamp.toIso8601String(),
+        'files': files,
+      };
+
+  static TransferItem fromJson(Map<String, dynamic> json) => TransferItem(
+        isSend: json['isSend'] as bool,
+        path: json['path'] as String,
+        ticket: json['ticket'] as String,
+        status: json['status'] as String,
+        size: BigInt.parse(json['size'] as String),
+        timestamp: DateTime.parse(json['timestamp'] as String),
+        files: List<String>.from(json['files'] as List),
+      );
 }

@@ -1,5 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+
+import '../models/transfer_item.dart';
 
 class FolderStats {
   final int fileCount;
@@ -78,8 +82,7 @@ class StorageService {
   }
 
   /// Format dynamic byte values (BigInt, int, num, double) into human readable strings.
-  static String formatBytes(dynamic bytes) {
-    if (bytes == null) return '0 B';
+  static String formatBytes(dynamic bytes) {    if (bytes == null) return '0 B';
     double size;
     if (bytes is BigInt) {
       size = bytes.toDouble();
@@ -95,5 +98,39 @@ class StorageService {
       i++;
     }
     return '${size.toStringAsFixed(2)} ${suffixes[i]}';
+  }
+
+  static Future<File> _historyFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/transfer_history.json');
+  }
+
+  /// Load persisted transfer history. A missing history file yields an empty
+  /// list; read, parse, and schema failures propagate to the caller.
+  static Future<List<TransferItem>> loadHistory() async {
+    final file = await _historyFile();
+    if (!await file.exists()) return [];
+    final List<dynamic> data = jsonDecode(await file.readAsString()) as List;
+    return data
+        .map((e) => TransferItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Persist transfer history atomically: serialize to a temporary file next
+  /// to the live one, then rename over it, so a failed write preserves the
+  /// last valid history. Write failures propagate to the caller.
+  static Future<void> saveHistory(List<TransferItem> items) async {
+    final file = await _historyFile();
+    final tempFile = File('${file.path}.tmp');
+    await tempFile
+        .writeAsString(jsonEncode(items.map((e) => e.toJson()).toList()));
+    try {
+      await tempFile.rename(file.path);
+    } catch (_) {
+      try {
+        await tempFile.delete();
+      } catch (_) {}
+      rethrow;
+    }
   }
 }

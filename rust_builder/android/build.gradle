@@ -45,7 +45,8 @@ android {
     }
 
     defaultConfig {
-        minSdkVersion 19
+        // iroh/quinn (Rust) require Android API 21+, matching Flutter's default minSdk.
+        minSdkVersion 21
     }
 }
 
