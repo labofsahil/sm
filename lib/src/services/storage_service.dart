@@ -1,5 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+
+import '../models/transfer_item.dart';
 
 class FolderStats {
   final int fileCount;
@@ -78,8 +82,7 @@ class StorageService {
   }
 
   /// Format dynamic byte values (BigInt, int, num, double) into human readable strings.
-  static String formatBytes(dynamic bytes) {
-    if (bytes == null) return '0 B';
+  static String formatBytes(dynamic bytes) {    if (bytes == null) return '0 B';
     double size;
     if (bytes is BigInt) {
       size = bytes.toDouble();
@@ -95,5 +98,33 @@ class StorageService {
       i++;
     }
     return '${size.toStringAsFixed(2)} ${suffixes[i]}';
+  }
+
+  static Future<File> _historyFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/transfer_history.json');
+  }
+
+  /// Load persisted transfer history. Returns an empty list on any error.
+  static Future<List<TransferItem>> loadHistory() async {
+    try {
+      final file = await _historyFile();
+      if (!await file.exists()) return [];
+      final List<dynamic> data =
+          (jsonDecode(await file.readAsString()) as List?) ?? [];
+      return data
+          .map((e) => TransferItem.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Persist transfer history to disk. Never throws.
+  static Future<void> saveHistory(List<TransferItem> items) async {
+    try {
+      final file = await _historyFile();
+      await file.writeAsString(jsonEncode(items.map((e) => e.toJson()).toList()));
+    } catch (_) {}
   }
 }

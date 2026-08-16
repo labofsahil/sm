@@ -65,16 +65,21 @@ class _DashboardPageState extends State<DashboardPage>
   final List<String> _debugLogs = [];
   final ScrollController _logsScrollController = ScrollController();
   Timer? _logPollTimer;
+  bool _logPollInFlight = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     _initializeDefaultPaths();
+    _loadHistory();
 
     // Poll Rust log buffer every second
     _logPollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      final newLogs = await getDebugLogs();
+      if (_logPollInFlight) return;
+      _logPollInFlight = true;
+      try {
+        final newLogs = await getDebugLogs();
       if (newLogs.isNotEmpty && mounted) {
         setState(() {
           _debugLogs.addAll(newLogs);
@@ -89,8 +94,22 @@ class _DashboardPageState extends State<DashboardPage>
             );
           }
         });
+        }
+      } finally {
+        _logPollInFlight = false;
       }
     });
+  }
+
+  Future<void> _loadHistory() async {
+    final items = await StorageService.loadHistory();
+    if (items.isNotEmpty && mounted) {
+      setState(() => _history.addAll(items));
+    }
+  }
+
+  void _persistHistory() {
+    StorageService.saveHistory(_history);
   }
 
   Future<void> _initializeDefaultPaths() async {
@@ -143,7 +162,7 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _pickSendFile() async {
     try {
       final result = await FilePicker.platform.pickFiles();
-      if (result != null && result.files.single.path != null) {
+      if (result != null && result.files.single.path != null && mounted) {
         setState(() {
           _sendPath = result.files.single.path;
           _folderStats = null;
@@ -151,9 +170,11 @@ class _DashboardPageState extends State<DashboardPage>
         });
       }
     } catch (e) {
-      setState(() {
-        _sendError = 'Error picking file: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _sendError = 'Error picking file: $e';
+        });
+      }
     }
   }
 
@@ -224,17 +245,20 @@ class _DashboardPageState extends State<DashboardPage>
           return;
         }
 
-        final stats = await StorageService.inspectFolder(selectedPath);
-        setState(() {
+      final stats = await StorageService.inspectFolder(selectedPath);
+      if (!mounted) return;
+      setState(() {
           _sendPath = selectedPath;
           _folderStats = stats;
           _sendError = null;
         });
       }
     } catch (e) {
-      setState(() {
-        _sendError = 'Error picking folder: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _sendError = 'Error picking folder: $e';
+        });
+      }
     }
   }
 
@@ -373,6 +397,7 @@ class _DashboardPageState extends State<DashboardPage>
                     files: [_sendPath!],
                   ),
                 );
+                _persistHistory();
               }
             });
           },
@@ -416,6 +441,7 @@ class _DashboardPageState extends State<DashboardPage>
         if (index != -1) {
           final old = _history[index];
           _history[index] = old.copyWith(status: 'Stopped');
+          _persistHistory();
         }
       }
       _isSending = false;
@@ -560,6 +586,7 @@ class _DashboardPageState extends State<DashboardPage>
                   files: exportedPaths,
                 ),
               );
+              _persistHistory();
             });
           },
           failed: (error) {
@@ -699,9 +726,14 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                     HistoryTab(
                       history: _history,
-                      onClearHistory: () => setState(() => _history.clear()),
-                      onDeleteItem: (index) =>
-                          setState(() => _history.removeAt(index)),
+                      onClearHistory: () {
+                        setState(() => _history.clear());
+                        _persistHistory();
+                      },
+                      onDeleteItem: (index) {
+                        setState(() => _history.removeAt(index));
+                        _persistHistory();
+                      },
                     ),
                     LogsTab(
                       logs: _debugLogs,
