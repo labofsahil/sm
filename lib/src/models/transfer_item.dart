@@ -54,6 +54,6 @@ class TransferItem {
         status: json['status'] as String,
         size: BigInt.parse(json['size'] as String),
         timestamp: DateTime.parse(json['timestamp'] as String),
-        files: (json['files'] as List).cast<String>(),
+        files: List<String>.from(json['files'] as List),
       );
 }

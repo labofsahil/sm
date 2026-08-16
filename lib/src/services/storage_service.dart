@@ -105,26 +105,32 @@ class StorageService {
     return File('${dir.path}/transfer_history.json');
   }
 
-  /// Load persisted transfer history. Returns an empty list on any error.
+  /// Load persisted transfer history. A missing history file yields an empty
+  /// list; read, parse, and schema failures propagate to the caller.
   static Future<List<TransferItem>> loadHistory() async {
-    try {
-      final file = await _historyFile();
-      if (!await file.exists()) return [];
-      final List<dynamic> data =
-          (jsonDecode(await file.readAsString()) as List?) ?? [];
-      return data
-          .map((e) => TransferItem.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    final file = await _historyFile();
+    if (!await file.exists()) return [];
+    final List<dynamic> data = jsonDecode(await file.readAsString()) as List;
+    return data
+        .map((e) => TransferItem.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
-  /// Persist transfer history to disk. Never throws.
+  /// Persist transfer history atomically: serialize to a temporary file next
+  /// to the live one, then rename over it, so a failed write preserves the
+  /// last valid history. Write failures propagate to the caller.
   static Future<void> saveHistory(List<TransferItem> items) async {
+    final file = await _historyFile();
+    final tempFile = File('${file.path}.tmp');
+    await tempFile
+        .writeAsString(jsonEncode(items.map((e) => e.toJson()).toList()));
     try {
-      final file = await _historyFile();
-      await file.writeAsString(jsonEncode(items.map((e) => e.toJson()).toList()));
-    } catch (_) {}
+      await tempFile.rename(file.path);
+    } catch (_) {
+      try {
+        await tempFile.delete();
+      } catch (_) {}
+      rethrow;
+    }
   }
 }
