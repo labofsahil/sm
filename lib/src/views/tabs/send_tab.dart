@@ -151,6 +151,10 @@ class SendTab extends StatelessWidget {
         ? sendPath!
         : sendPath!.split(Platform.pathSeparator).last;
     final isFolder = Directory(sendPath!).existsSync() || folderStats != null;
+    final fileObj = File(sendPath!);
+    final fileSize = !isFolder && fileObj.existsSync()
+        ? StorageService.formatBytes(BigInt.from(fileObj.lengthSync()))
+        : null;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -220,6 +224,26 @@ class SendTab extends StatelessWidget {
                       ),
                     ),
                   ),
+                ] else if (fileSize != null) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.secondary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      fileSize,
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.secondaryLight,
+                      ),
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -227,6 +251,7 @@ class SendTab extends StatelessWidget {
           IconButton(
             onPressed: onClearSelection,
             icon: const Icon(Icons.close, color: Colors.grey, size: 18),
+            tooltip: 'Clear selection',
           ),
         ],
       ),

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -240,25 +241,78 @@ class ReceiveTab extends StatelessWidget {
     required String hint,
     required IconData icon,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: TextField(
-        controller: controller,
-        style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
-        decoration: InputDecoration(
-          icon: Icon(icon, color: AppTheme.primaryLight, size: 20),
-          border: InputBorder.none,
-          labelText: label,
-          labelStyle: GoogleFonts.inter(color: Colors.grey[500], fontSize: 13),
-          hintText: hint,
-          hintStyle: GoogleFonts.inter(color: Colors.grey[700], fontSize: 13),
-        ),
-      ),
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final hasText = value.text.isNotEmpty;
+        return Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.border),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: Row(
+            children: [
+              Icon(icon, color: AppTheme.primaryLight, size: 20),
+              const SizedBox(width: 16),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    labelText: label,
+                    labelStyle: GoogleFonts.inter(
+                      color: Colors.grey[500],
+                      fontSize: 13,
+                    ),
+                    hintText: hint,
+                    hintStyle: GoogleFonts.inter(
+                      color: Colors.grey[700],
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+              if (hasText)
+                IconButton(
+                  icon: const Icon(Icons.clear_rounded, color: Colors.grey, size: 18),
+                  tooltip: 'Clear',
+                  onPressed: () => controller.clear(),
+                )
+              else
+                TextButton.icon(
+                  onPressed: () async {
+                    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+                    if (clipboardData?.text != null && clipboardData!.text!.isNotEmpty) {
+                      controller.text = clipboardData.text!.trim();
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Row(
+                              children: [
+                                Icon(Icons.check_circle, color: AppTheme.emeraldAccentColor),
+                                SizedBox(width: 8),
+                                Text('Ticket pasted from clipboard'),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.content_paste_rounded, size: 16),
+                  label: const Text('Paste'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.primaryLight,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
