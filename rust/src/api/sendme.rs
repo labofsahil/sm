@@ -13,9 +13,7 @@ use futures::StreamExt;
 use iroh::protocol::Router;
 use iroh::Endpoint;
 use iroh::RelayMode;
-use iroh_blobs::api::blobs::{
-    AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem, ImportMode,
-};
+use iroh_blobs::api::blobs::{AddPathOptions, AddProgressItem, ImportMode};
 use iroh_blobs::api::remote::GetProgressItem;
 use iroh_blobs::api::TempTag;
 use iroh_blobs::format::collection::Collection;
@@ -24,7 +22,7 @@ use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
 use iroh_blobs::BlobFormat;
 use once_cell::sync::Lazy;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tracing::{debug, error, info, warn};
 
 use crate::frb_generated::StreamSink;
@@ -124,6 +122,10 @@ struct ReceiveSession {
 }
 
 static ACTIVE_SEND: Lazy<Mutex<Option<SendSession>>> = Lazy::new(|| Mutex::new(None));
+static SEND_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static RECEIVE_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static SEND_CANCEL: Lazy<watch::Sender<()>> = Lazy::new(|| watch::channel(()).0);
+
 static ACTIVE_RECEIVE: Lazy<Mutex<Option<ReceiveSession>>> = Lazy::new(|| Mutex::new(None));
 
 // ─── Public API ──────────────────────────────────────────────────
@@ -142,6 +144,7 @@ pub async fn start_send(path: String, temp_dir: String, sink: StreamSink<SendPro
 /// Stop an active send session, shutdown the router, and reclaim temporary blob storage.
 pub fn stop_send() -> anyhow::Result<()> {
     let mut guard = ACTIVE_SEND.lock().unwrap();
+    SEND_CANCEL.send_replace(());
     if let Some(session) = guard.take() {
         info!(
             "[SEND] Stopping active send session, cleaning up {}",
@@ -205,15 +208,17 @@ async fn start_send_inner(
 ) -> anyhow::Result<()> {
     info!("[SEND] start_send_inner called: path={}", path_str);
 
+    let _start_guard = SEND_START_LOCK.lock().await;
     // 1. Clean up any existing send session
     let _ = stop_send();
+    let mut cancelled = SEND_CANCEL.subscribe();
 
     reporter.report(SendProgress::StartingEndpoint);
 
     // 2. Validate input path
-    let trimmed_path_str = path_str.trim();
-    anyhow::ensure!(!trimmed_path_str.is_empty(), "Target path cannot be empty");
-    let path = PathBuf::from(trimmed_path_str);
+    anyhow::ensure!(!path_str.is_empty(), "Target path cannot be empty");
+    let path = tokio::fs::canonicalize(&path_str).await?;
+    anyhow::ensure!(path.parent().is_some(), "Cannot share root directory");
     anyhow::ensure!(
         path.exists(),
         "Target path '{}' does not exist",
@@ -271,7 +276,12 @@ async fn start_send_inner(
 
     // 5. Import the file or directory
     info!("[SEND] Importing path: {}", path.display());
-    let (temp_tag, size, _collection) = match import_with_progress(path, &store, reporter).await {
+    let imported = tokio::select! {
+        biased;
+        _ = cancelled.changed() => Err(anyhow::anyhow!("Send operation cancelled by user")),
+        result = import_with_progress(path, &store, reporter) => result,
+    };
+    let (temp_tag, size, _collection) = match imported {
         Ok(res) => res,
         Err(e) => {
             error!("[SEND] Import failed: {}", e);
@@ -293,11 +303,17 @@ async fn start_send_inner(
 
     // 7. Wait for endpoint to come online (relay connection)
     let ep = router.endpoint().clone();
-    match tokio::time::timeout(Duration::from_secs(30), async move {
-        let _ = ep.online().await;
-    })
-    .await
-    {
+    let online = tokio::select! {
+        biased;
+        _ = cancelled.changed() => {
+            let _ = router.shutdown().await;
+            drop(temp_tag);
+            let _ = tokio::fs::remove_dir_all(&blobs_data_dir).await;
+            anyhow::bail!("Send operation cancelled by user");
+        }
+        result = tokio::time::timeout(Duration::from_secs(30), ep.online()) => result,
+    };
+    match online {
         Ok(_) => info!("[SEND] Endpoint online (relay connected)"),
         Err(_) => warn!("[SEND] Timeout waiting for relay — using local addresses only"),
     }
@@ -316,7 +332,23 @@ async fn start_send_inner(
         temp_tag,
         blobs_data_dir,
     };
-    *ACTIVE_SEND.lock().unwrap() = Some(session);
+    // Stop and activation share the same lock, so a stopped preparation cannot
+    // publish a new session after stop_send has returned.
+    let cancelled_before_activation = {
+        let mut active = ACTIVE_SEND.lock().unwrap();
+        if cancelled.has_changed().unwrap_or(true) {
+            Some(session)
+        } else {
+            *active = Some(session);
+            None
+        }
+    };
+    if let Some(session) = cancelled_before_activation {
+        let _ = session.router.shutdown().await;
+        drop(session.temp_tag);
+        let _ = tokio::fs::remove_dir_all(session.blobs_data_dir).await;
+        anyhow::bail!("Send operation cancelled by user");
+    }
 
     reporter.report(SendProgress::Sharing { ticket: ticket_str });
     info!("[SEND] Sharing event emitted, session active");
@@ -334,14 +366,20 @@ async fn start_receive_inner(
 ) -> anyhow::Result<()> {
     info!("[RECV] start_receive_inner called");
 
-    // 1. Cancel any existing receive session
+    // Cancellation precedes serialization so replacement requests interrupt the
+    // previous transfer, but cannot race its store teardown or session clearing.
     let _ = cancel_receive();
+    let _start_guard = RECEIVE_START_LOCK.lock().await;
 
     // 2. Parse the ticket
     let ticket = BlobTicket::from_str(&ticket_str).map_err(|e| {
         error!("[RECV] Invalid ticket: {}", e);
         e
     })?;
+    anyhow::ensure!(
+        ticket.format() == BlobFormat::HashSeq,
+        "Ticket must reference a collection"
+    );
     let addr = ticket.addr().clone();
     info!(
         "[RECV] Ticket parsed. Hash={}, format={:?}",
@@ -387,7 +425,7 @@ async fn start_receive_inner(
     info!("[RECV] Receiver endpoint bound. ID: {}", endpoint.id());
 
     // 5. Set up temporary blob store
-    let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());
+    let dir_name = format!(".sendme-recv-{}", hex::encode(rand::random::<[u8; 16]>()));
     let iroh_data_dir = PathBuf::from(&temp_dir_str).join(&dir_name);
     if let Err(e) = tokio::fs::create_dir_all(&iroh_data_dir).await {
         error!(
@@ -419,7 +457,7 @@ async fn start_receive_inner(
         let local = db.remote().local(hash_and_format).await?;
         info!("[RECV] Local state: is_complete={}", local.is_complete());
 
-        let (_stats, total_files, payload_size) = if !local.is_complete() {
+        let (_stats, _total_files, payload_size) = if !local.is_complete() {
             info!("[RECV] Connecting to sender at {:?}...", addr);
             let connection = endpoint
                 .connect(addr, iroh_blobs::protocol::ALPN)
@@ -445,8 +483,8 @@ async fn start_receive_inner(
                 e
             })?;
 
-            let total_size: u64 = sizes.iter().copied().sum();
-            let payload_size: u64 = sizes.iter().skip(2).copied().sum();
+            let total_size = sum_sizes(sizes.iter().copied())?;
+            let payload_size = sum_sizes(sizes.iter().skip(1).copied())?;
             let total_files = sizes.len().saturating_sub(1) as u64;
             info!(
                 "[RECV] Metadata: {} files, total_size={}, payload_size={}",
@@ -455,7 +493,7 @@ async fn start_receive_inner(
 
             let get = db.remote().execute_get(connection, local.missing());
             let mut stream = get.stream();
-            let mut stats = iroh_blobs::get::Stats::default();
+            let mut stats = None;
             let mut last_pct = 0.0f64;
 
             while let Some(item) = stream.next().await {
@@ -481,7 +519,7 @@ async fn start_receive_inner(
                     }
                     GetProgressItem::Done(value) => {
                         info!("[RECV] Download done: {:?}", value);
-                        stats = value;
+                        stats = Some(value);
                         break;
                     }
                     GetProgressItem::Error(cause) => {
@@ -490,6 +528,8 @@ async fn start_receive_inner(
                     }
                 }
             }
+            let stats =
+                stats.ok_or_else(|| anyhow::anyhow!("Download stream ended before completion"))?;
             reporter.report(ReceiveProgress::DownloadDone {
                 total_bytes: total_size,
             });
@@ -516,12 +556,14 @@ async fn start_receive_inner(
         });
 
         info!("[RECV] Exporting to: {}", destination_dir_str);
-        let exported_paths = export_with_progress(&db, collection, &destination_dir_str, reporter)
-            .await
-            .map_err(|e| {
-                error!("[RECV] Export failed: {}", e);
-                e
-            })?;
+        let total_files = collection.len() as u64;
+        let (exported_paths, payload_size) =
+            export_with_progress(&db, collection, &destination_dir_str, reporter)
+                .await
+                .map_err(|e| {
+                    error!("[RECV] Export failed: {}", e);
+                    e
+                })?;
 
         info!(
             "[RECV] Export complete! total_files={}, payload_size={}",
@@ -531,14 +573,15 @@ async fn start_receive_inner(
     };
 
     let result = tokio::select! {
-        res = receive_fut => {
-            endpoint.close().await;
-            res
-        }
+        biased;
         _ = &mut cancel_rx => {
             warn!("[RECV] Cancelled by user");
             endpoint.close().await;
-            anyhow::bail!("Receive operation cancelled by user")
+            Err(anyhow::anyhow!("Receive operation cancelled by user"))
+        }
+        res = receive_fut => {
+            endpoint.close().await;
+            res
         }
     };
 
@@ -576,22 +619,13 @@ async fn import_with_progress(
     db: &FsStore,
     reporter: &impl SendProgressReporter,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
-    // Normalize path by trimming trailing slashes
-    let path_str = path.to_string_lossy();
-    let trimmed_path_str =
-        if path_str.len() > 1 && (path_str.ends_with('/') || path_str.ends_with('\\')) {
-            path_str.trim_end_matches(['/', '\\']).to_string()
-        } else {
-            path_str.to_string()
-        };
-    let path = PathBuf::from(trimmed_path_str);
-
+    let path = tokio::fs::canonicalize(path).await?;
     info!(
         "[SEND] import_with_progress: target path={}",
         path.display()
     );
     anyhow::ensure!(path.exists(), "path '{}' does not exist", path.display());
-    anyhow::ensure!(path != Path::new("/"), "Cannot share root directory '/'");
+    anyhow::ensure!(path.parent().is_some(), "Cannot share root directory");
 
     let is_dir = path.is_dir();
     let is_file = path.is_file();
@@ -633,33 +667,9 @@ async fn import_with_progress(
                     );
                     if entry_is_file {
                         let p = e.into_path();
-                        match p.strip_prefix(root) {
-                            Ok(rel) => match canonicalized_path_to_string(rel, true) {
-                                Ok(name) => {
-                                    info!(
-                                        "[SEND] Adding file to import collection: name='{}', path='{}'",
-                                        name,
-                                        p.display()
-                                    );
-                                    files.push((name, p));
-                                }
-                                Err(err) => {
-                                    warn!(
-                                        "[SEND] Skipping file '{}': invalid relative path name: {}",
-                                        rel.display(),
-                                        err
-                                    );
-                                }
-                            },
-                            Err(err) => {
-                                warn!(
-                                    "[SEND] Skipping file '{}': failed to strip prefix '{}': {}",
-                                    p.display(),
-                                    root.display(),
-                                    err
-                                );
-                            }
-                        }
+                        let relative = p.strip_prefix(root)?;
+                        let name = canonicalized_path_to_string(relative, true)?;
+                        files.push((name, p));
                     }
                 }
                 Err(err) => {
@@ -678,22 +688,14 @@ async fn import_with_progress(
 
     info!("[SEND] Total files collected for import: {}", files.len());
 
-    if files.is_empty() {
-        if let Some(err) = walk_error {
-            error!("[SEND] Import aborted: walkdir encountered error: {}", err);
-            anyhow::bail!(
-                "Cannot read folder '{}': {}. On Android, ensure All Files Access permission is enabled.",
-                path.display(),
-                err
-            );
-        } else {
-            error!(
-                "[SEND] Import aborted: 0 files collected in '{}'",
-                path.display()
-            );
-            anyhow::bail!("Folder '{}' contains no files to share.", path.display());
-        }
+    if let Some(err) = walk_error {
+        anyhow::bail!("Cannot read entire folder {}: {}", path.display(), err);
     }
+    anyhow::ensure!(
+        !files.is_empty(),
+        "Folder '{}' contains no files to share.",
+        path.display()
+    );
 
     let mut names_and_tags = Vec::new();
 
@@ -742,7 +744,7 @@ async fn import_with_progress(
     }
 
     names_and_tags.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
-    let total_size = names_and_tags.iter().map(|(_, _, size)| *size).sum::<u64>();
+    let total_size = sum_sizes(names_and_tags.iter().map(|(_, _, size)| *size))?;
 
     // Build the collection from sorted (name, hash) pairs
     let (collection, tags) = names_and_tags
@@ -766,57 +768,80 @@ async fn export_with_progress(
     collection: Collection,
     destination_dir: &str,
     reporter: &impl ReceiveProgressReporter,
-) -> anyhow::Result<Vec<String>> {
-    let root = PathBuf::from(destination_dir);
-    let total_blobs = collection.len();
+) -> anyhow::Result<(Vec<String>, u64)> {
+    tokio::fs::create_dir_all(destination_dir).await?;
+    let root = tokio::fs::canonicalize(destination_dir).await?;
     let mut exported_paths = Vec::new();
+    let mut total_bytes = 0u64;
 
-    for (idx, (name, hash)) in collection.iter().enumerate() {
+    for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
-        if target.exists() {
-            anyhow::bail!("target file already exists: {}", target.display());
+        // Validate filesystem components too: lexical checks alone do not stop
+        // a pre-existing symlink from redirecting writes outside the destination.
+        let relative_parent = target.parent().unwrap().strip_prefix(&root)?;
+        let mut parent = root.clone();
+        for component in relative_parent.components() {
+            parent.push(component);
+            match tokio::fs::create_dir(&parent).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.into()),
+            }
+            let metadata = tokio::fs::symlink_metadata(&parent).await?;
+            anyhow::ensure!(
+                metadata.is_dir() && !metadata.is_symlink(),
+                "Export parent is not a regular directory: {}",
+                parent.display()
+            );
         }
 
-        if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                anyhow::anyhow!("Failed to create directory {}: {}", parent.display(), e)
-            })?;
-        }
-
+        // create_new atomically refuses existing files and dangling symlinks.
+        let mut output = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .await?;
+        let mut pending = PendingExport(Some(target.clone()));
         reporter.report(ReceiveProgress::Exporting {
             file_name: name.clone(),
-            bytes_exported: idx as u64,
-            bytes_total: total_blobs as u64,
+            bytes_exported: 0,
+            bytes_total: 0,
         });
-
-        let mut stream = db
-            .export_with_opts(ExportOptions {
-                hash: *hash,
-                target: target.clone(),
-                mode: ExportMode::Copy,
-            })
-            .stream()
-            .await;
-
-        while let Some(item) = stream.next().await {
-            match item {
-                ExportProgressItem::Size(_) => {}
-                ExportProgressItem::CopyProgress(_) => {}
-                ExportProgressItem::Done => {}
-                ExportProgressItem::Error(cause) => {
-                    anyhow::bail!(
-                        "Error exporting {} to {}: {}",
-                        name,
-                        target.display(),
-                        cause
-                    );
-                }
-            }
-        }
+        let mut reader = db.reader(*hash);
+        let copied = tokio::io::copy(&mut reader, &mut output).await?;
+        use tokio::io::AsyncWriteExt;
+        output.flush().await?;
+        drop(output);
+        pending.0 = None;
+        total_bytes = sum_sizes([total_bytes, copied].into_iter())?;
+        reporter.report(ReceiveProgress::Exporting {
+            file_name: name.clone(),
+            bytes_exported: copied,
+            bytes_total: copied,
+        });
         exported_paths.push(target.to_string_lossy().to_string());
     }
 
-    Ok(exported_paths)
+    Ok((exported_paths, total_bytes))
+}
+
+/// Remove a partial output if copying fails or its future is cancelled.
+struct PendingExport(Option<PathBuf>);
+
+impl Drop for PendingExport {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn sum_sizes(mut sizes: impl Iterator<Item = u64>) -> anyhow::Result<u64> {
+    sizes.try_fold(0u64, |total, size| {
+        total
+            .checked_add(size)
+            .ok_or_else(|| anyhow::anyhow!("Transfer size exceeds supported range"))
+    })
 }
 
 // ─── Path Utilities ──────────────────────────────────────────────
@@ -832,7 +857,10 @@ fn validate_path_component(component: &str) -> anyhow::Result<()> {
         "Path components cannot contain relative traversal segments ('.' or '..')"
     );
     anyhow::ensure!(
-        !component.contains('/') && !component.contains('\\') && !component.contains('\0'),
+        !component.contains('/')
+            && !component.contains('\\')
+            && !component.contains('\0')
+            && !component.contains(':'),
         "Path component cannot contain path separators or null bytes"
     );
     Ok(())
@@ -875,7 +903,7 @@ fn canonicalized_path_to_string(
                     None => return Some(Err(anyhow::anyhow!("Invalid unicode character in path"))),
                 };
 
-                if !c.contains('/') && !c.contains('\\') && !c.contains('\0') {
+                if validate_path_component(c).is_ok() {
                     Some(Ok(c))
                 } else {
                     Some(Err(anyhow::anyhow!(
@@ -1005,7 +1033,14 @@ mod tests {
         {
             let events = receive_events.lock().unwrap();
             for event in events.iter() {
-                if let ReceiveProgress::Finished { .. } = event {
+                if let ReceiveProgress::Finished {
+                    total_files,
+                    total_bytes,
+                    ..
+                } = event
+                {
+                    assert_eq!(*total_files, 1);
+                    assert_eq!(*total_bytes, file_content.len() as u64);
                     finished = true;
                 }
             }
@@ -1107,6 +1142,14 @@ mod tests {
 
         assert_eq!(read_content1, file1_content);
         assert_eq!(read_content2, file2_content);
+
+        assert!(receive_events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event,
+            ReceiveProgress::Finished { total_files: 2, total_bytes, .. }
+            if *total_bytes == (file1_content.len() + file2_content.len()) as u64)));
 
         stop_send()?;
         tokio::fs::remove_dir_all(&temp_base).await?;
@@ -1240,5 +1283,145 @@ mod tests {
         let root_path = Path::new("/");
         let root = root_path.parent().unwrap_or_else(|| Path::new("/"));
         assert_eq!(root, Path::new("/"));
+    }
+    #[test]
+    fn test_size_overflow() {
+        assert_eq!(sum_sizes([10, 20].into_iter()).unwrap(), 30);
+        assert!(sum_sizes([u64::MAX, 1].into_iter()).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_receive_reclaims_store() -> anyhow::Result<()> {
+        let _guard = TEST_LOCK.lock().await;
+        struct CancelOnConnect;
+        impl ReceiveProgressReporter for CancelOnConnect {
+            fn report(&self, progress: ReceiveProgress) {
+                if matches!(progress, ReceiveProgress::Connecting) {
+                    cancel_receive().unwrap();
+                }
+            }
+        }
+        let base = std::env::temp_dir().join(format!("sendme-cancel-{}", rand::random::<u64>()));
+        tokio::fs::create_dir_all(&base).await?;
+        let ticket = BlobTicket::new(
+            iroh::SecretKey::generate().public().into(),
+            iroh_blobs::Hash::new(b"test"),
+            BlobFormat::HashSeq,
+        );
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            start_receive_inner(
+                ticket.to_string(),
+                base.to_string_lossy().into_owned(),
+                base.join("dest").to_string_lossy().into_owned(),
+                &CancelOnConnect,
+            ),
+        )
+        .await??;
+        assert!(ACTIVE_RECEIVE.lock().unwrap().is_none());
+        assert!(tokio::fs::read_dir(&base)
+            .await?
+            .next_entry()
+            .await?
+            .is_none());
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stop_send_during_preparation() -> anyhow::Result<()> {
+        let _guard = TEST_LOCK.lock().await;
+        struct StopOnStart;
+        impl SendProgressReporter for StopOnStart {
+            fn report(&self, progress: SendProgress) {
+                if matches!(progress, SendProgress::StartingEndpoint) {
+                    stop_send().unwrap();
+                }
+                assert!(!matches!(progress, SendProgress::Sharing { .. }));
+            }
+        }
+        let base = std::env::temp_dir().join(format!("sendme-stop-{}", rand::random::<u64>()));
+        tokio::fs::create_dir_all(&base).await?;
+        let source = base.join("source.txt");
+        tokio::fs::write(&source, b"test").await?;
+        let result = start_send_inner(
+            source.to_string_lossy().into_owned(),
+            base.to_string_lossy().into_owned(),
+            &StopOnStart,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(ACTIVE_SEND.lock().unwrap().is_none());
+        assert_eq!(std::fs::read_dir(&base)?.count(), 1);
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_export_refuses_overwrite_and_removes_failed_output() -> anyhow::Result<()> {
+        let base = std::env::temp_dir().join(format!("sendme-export-{}", rand::random::<u64>()));
+        let db = FsStore::load(base.join("store")).await?;
+        let dest = base.join("dest");
+        tokio::fs::create_dir_all(&dest).await?;
+        let tag = db.add_slice(b"new content").await?;
+        let reporter = TestReceiveReporter {
+            events: Arc::new(Mutex::new(Vec::new())),
+        };
+        let collection: Collection = [("file.txt".to_string(), tag.hash)].into_iter().collect();
+        tokio::fs::write(dest.join("file.txt"), b"existing").await?;
+        assert!(
+            export_with_progress(&db, collection, dest.to_str().unwrap(), &reporter)
+                .await
+                .is_err()
+        );
+        assert_eq!(tokio::fs::read(dest.join("file.txt")).await?, b"existing");
+        let missing: Collection = [("missing.txt".to_string(), iroh_blobs::Hash::new(b"missing"))]
+            .into_iter()
+            .collect();
+        assert!(
+            export_with_progress(&db, missing, dest.to_str().unwrap(), &reporter)
+                .await
+                .is_err()
+        );
+        assert!(!dest.join("missing.txt").exists());
+        db.shutdown().await?;
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_export_rejects_symlinks() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("sendme-symlink-{}", rand::random::<u64>()));
+        let db = FsStore::load(base.join("store")).await?;
+        let dest = base.join("dest");
+        let outside = base.join("outside");
+        tokio::fs::create_dir_all(&dest).await?;
+        tokio::fs::create_dir_all(&outside).await?;
+        symlink(&outside, dest.join("escape"))?;
+        symlink(outside.join("missing.txt"), dest.join("dangling.txt"))?;
+        let tag = db.add_slice(b"content").await?;
+        let reporter = TestReceiveReporter {
+            events: Arc::new(Mutex::new(Vec::new())),
+        };
+        for name in [
+            "escape/file.txt",
+            "dangling.txt",
+            "../outside/file.txt",
+            "C:escape",
+        ] {
+            let collection = [(name.to_string(), tag.hash)].into_iter().collect();
+            assert!(
+                export_with_progress(&db, collection, dest.to_str().unwrap(), &reporter)
+                    .await
+                    .is_err(),
+                "{name}"
+            );
+        }
+        assert_eq!(std::fs::read_dir(&outside)?.count(), 0);
+        db.shutdown().await?;
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
     }
 }

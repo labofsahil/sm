@@ -23,8 +23,10 @@ class FolderPickerModal extends StatefulWidget {
   State<FolderPickerModal> createState() => _FolderPickerModalState();
 }
 
-class _FolderPickerModalState extends State<FolderPickerModal> {
-  late Directory _currentDir;
+class _FolderPickerModalState extends State<FolderPickerModal>
+    with WidgetsBindingObserver {
+  Directory _currentDir = Directory(Platform.pathSeparator);
+  int _loadGeneration = 0;
   List<FileSystemEntity> _entries = [];
   bool _isLoading = true;
   String? _errorMessage;
@@ -35,7 +37,34 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
   @override
   void initState() {
     super.initState();
-    _initDirectory();
+    WidgetsBinding.instance.addObserver(this);
+    _initDirectory().catchError((Object error) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Cannot initialize folder picker: $error';
+        _isLoading = false;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshPermission();
+    }
+  }
+
+  Future<void> _refreshPermission() async {
+    final granted = await StorageService.checkStoragePermission();
+    if (!mounted) return;
+    setState(() => _hasPermission = granted);
+    if (granted && !_isLoading) await _loadCurrentDirectory();
   }
 
   Future<void> _initDirectory() async {
@@ -79,18 +108,23 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
       }
     }
 
+    if (!mounted) return;
     _currentDir = Directory(startPath);
     await _loadCurrentDirectory();
   }
 
   Future<void> _loadCurrentDirectory() async {
+    if (!mounted) return;
+    final generation = ++_loadGeneration;
+    final directory = _currentDir;
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
     try {
-      if (!await _currentDir.exists()) {
+      if (!await directory.exists()) {
+        if (!mounted || generation != _loadGeneration) return;
         setState(() {
           _errorMessage = 'Directory does not exist: ${_currentDir.path}';
           _entries = [];
@@ -102,8 +136,9 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
       final List<FileSystemEntity> dirs = [];
       final List<FileSystemEntity> files = [];
 
-      final stream = _currentDir.list(followLinks: false);
+      final stream = directory.list(followLinks: false);
       await for (final entity in stream) {
+        if (!mounted || generation != _loadGeneration) return;
         final name = entity.path.split(Platform.pathSeparator).last;
         if (name.startsWith('.')) continue; // ignore hidden
         if (entity is Directory) {
@@ -114,13 +149,17 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
       }
 
       dirs.sort((a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()));
-      files.sort((a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()));
+      files.sort(
+        (a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()),
+      );
 
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _entries = [...dirs, ...files];
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _errorMessage = 'Cannot access directory: $e';
         _entries = [];
@@ -145,10 +184,7 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
 
   Future<void> _requestPermission() async {
     await StorageService.requestStoragePermission();
-    _hasPermission = await StorageService.checkStoragePermission();
-    if (_hasPermission) {
-      _loadCurrentDirectory();
-    }
+    await _refreshPermission();
   }
 
   String _formatFileSize(int bytes) {
@@ -159,7 +195,8 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
 
   @override
   Widget build(BuildContext context) {
-    final folderName = _currentDir.path.split(Platform.pathSeparator).last.isEmpty
+    final folderName =
+        _currentDir.path.split(Platform.pathSeparator).last.isEmpty
         ? 'Root'
         : _currentDir.path.split(Platform.pathSeparator).last;
 
@@ -259,7 +296,10 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                   Expanded(
                     child: Text(
                       'All Files Access required to browse all storage.',
-                      style: GoogleFonts.inter(color: Colors.white, fontSize: 12),
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                   TextButton(
@@ -307,9 +347,7 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                     color: isSelected ? Colors.white : Colors.grey[300],
                   ),
                   side: BorderSide(
-                    color: isSelected
-                        ? AppTheme.primaryLight
-                        : AppTheme.border,
+                    color: isSelected ? AppTheme.primaryLight : AppTheme.border,
                   ),
                   onPressed: () {
                     final target = Directory(shortcut['path']!);
@@ -364,159 +402,148 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
           Expanded(
             child: _isLoading
                 ? const Center(
-                    child: CircularProgressIndicator(
-                      color: AppTheme.primary,
-                    ),
+                    child: CircularProgressIndicator(color: AppTheme.primary),
                   )
                 : _errorMessage != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.folder_off_rounded,
+                            color: AppTheme.errorColor,
+                            size: 40,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(
+                              color: Colors.grey[400],
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            onPressed: _requestPermission,
+                            icon: const Icon(Icons.security_rounded, size: 16),
+                            label: const Text('Check Permissions'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.primary,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : _entries.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.folder_open_rounded,
+                          color: Colors.grey[700],
+                          size: 48,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'This folder is empty',
+                          style: GoogleFonts.inter(
+                            color: Colors.grey[500],
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 8,
+                    ),
+                    itemCount: _entries.length,
+                    itemBuilder: (context, index) {
+                      final entity = _entries[index];
+                      final isDir = entity is Directory;
+                      final name = entity.path
+                          .split(Platform.pathSeparator)
+                          .last;
+
+                      return InkWell(
+                        onTap: isDir ? () => _navigateTo(entity) : null,
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isDir
+                                ? AppTheme.borderSubtle.withValues(alpha: 0.4)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
                             children: [
-                              const Icon(
-                                Icons.folder_off_rounded,
-                                color: AppTheme.errorColor,
-                                size: 40,
+                              Icon(
+                                isDir
+                                    ? Icons.folder_rounded
+                                    : Icons.insert_drive_file_outlined,
+                                color: isDir
+                                    ? AppTheme.primaryLight
+                                    : Colors.grey[500],
+                                size: 22,
                               ),
-                              const SizedBox(height: 12),
-                              Text(
-                                _errorMessage!,
-                                textAlign: TextAlign.center,
-                                style: GoogleFonts.inter(
-                                  color: Colors.grey[400],
-                                  fontSize: 13,
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 14,
+                                    fontWeight: isDir
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
+                                    color: isDir
+                                        ? Colors.white
+                                        : Colors.grey[400],
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                              const SizedBox(height: 16),
-                              ElevatedButton.icon(
-                                onPressed: _requestPermission,
-                                icon: const Icon(
-                                  Icons.security_rounded,
-                                  size: 16,
+                              if (isDir)
+                                const Icon(
+                                  Icons.chevron_right_rounded,
+                                  color: Colors.grey,
+                                  size: 20,
+                                )
+                              else
+                                FutureBuilder<FileStat>(
+                                  future: entity.stat(),
+                                  builder: (context, snapshot) {
+                                    if (snapshot.hasData) {
+                                      return Text(
+                                        _formatFileSize(snapshot.data!.size),
+                                        style: GoogleFonts.inter(
+                                          fontSize: 11,
+                                          color: Colors.grey[600],
+                                        ),
+                                      );
+                                    }
+                                    return const SizedBox.shrink();
+                                  },
                                 ),
-                                label: const Text('Check Permissions'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppTheme.primary,
-                                  foregroundColor: Colors.white,
-                                ),
-                              ),
                             ],
                           ),
                         ),
-                      )
-                    : _entries.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.folder_open_rounded,
-                                  color: Colors.grey[700],
-                                  size: 48,
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  'This folder is empty',
-                                  style: GoogleFonts.inter(
-                                    color: Colors.grey[500],
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 8,
-                            ),
-                            itemCount: _entries.length,
-                            itemBuilder: (context, index) {
-                              final entity = _entries[index];
-                              final isDir = entity is Directory;
-                              final name = entity.path
-                                  .split(Platform.pathSeparator)
-                                  .last;
-
-                              return InkWell(
-                                onTap:
-                                    isDir ? () => _navigateTo(entity) : null,
-                                borderRadius: BorderRadius.circular(10),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 10,
-                                  ),
-                                  margin: const EdgeInsets.symmetric(
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isDir
-                                        ? AppTheme.borderSubtle
-                                            .withValues(alpha: 0.4)
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        isDir
-                                            ? Icons.folder_rounded
-                                            : Icons.insert_drive_file_outlined,
-                                        color: isDir
-                                            ? AppTheme.primaryLight
-                                            : Colors.grey[500],
-                                        size: 22,
-                                      ),
-                                      const SizedBox(width: 14),
-                                      Expanded(
-                                        child: Text(
-                                          name,
-                                          style: GoogleFonts.inter(
-                                            fontSize: 14,
-                                            fontWeight: isDir
-                                                ? FontWeight.w600
-                                                : FontWeight.normal,
-                                            color: isDir
-                                                ? Colors.white
-                                                : Colors.grey[400],
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      if (isDir)
-                                        const Icon(
-                                          Icons.chevron_right_rounded,
-                                          color: Colors.grey,
-                                          size: 20,
-                                        )
-                                      else
-                                        FutureBuilder<FileStat>(
-                                          future: entity.stat(),
-                                          builder: (context, snapshot) {
-                                            if (snapshot.hasData) {
-                                              return Text(
-                                                _formatFileSize(
-                                                  snapshot.data!.size,
-                                                ),
-                                                style: GoogleFonts.inter(
-                                                  fontSize: 11,
-                                                  color: Colors.grey[600],
-                                                ),
-                                              );
-                                            }
-                                            return const SizedBox.shrink();
-                                          },
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
+                      );
+                    },
+                  ),
           ),
 
           // Bottom Action Bar
@@ -558,7 +585,10 @@ class _FolderPickerModalState extends State<FolderPickerModal> {
                 ),
                 const SizedBox(width: 16),
                 ElevatedButton.icon(
-                  onPressed: _currentDir.path == '/' || _currentDir.path.isEmpty
+                  onPressed:
+                      _isLoading ||
+                          _errorMessage != null ||
+                          _currentDir.parent.path == _currentDir.path
                       ? null
                       : () => Navigator.pop(context, _currentDir.path),
                   icon: const Icon(Icons.check_rounded, size: 18),

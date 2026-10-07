@@ -31,6 +31,8 @@ class _DashboardPageState extends State<DashboardPage>
   late TabController _tabController;
 
   // Send state
+  int _sendGeneration = 0;
+  int _receiveGeneration = 0;
   String? _sendPath;
   FolderStats? _folderStats;
   bool _isSending = false;
@@ -121,7 +123,10 @@ class _DashboardPageState extends State<DashboardPage>
 
   /// Inserts a history entry after any in-flight load has settled, so the
   /// load cannot reorder or drop the entry.
-  Future<void> _addHistoryEntry(TransferItem item, {bool dedupe = false}) async {
+  Future<void> _addHistoryEntry(
+    TransferItem item, {
+    bool dedupe = false,
+  }) async {
     await _historyLoad;
     if (!mounted) return;
     if (dedupe && _history.any((h) => h.ticket == item.ticket)) return;
@@ -168,7 +173,7 @@ class _DashboardPageState extends State<DashboardPage>
 
       if (mounted) {
         setState(() {
-          _destController.text = sendmePath;
+          if (_destController.text.isEmpty) _destController.text = sendmePath;
         });
       }
     } catch (_) {}
@@ -176,6 +181,18 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void dispose() {
+    _sendGeneration++;
+    _receiveGeneration++;
+    unawaited(
+      stopSend().catchError((Object error) {
+        debugPrint('Failed to stop sharing: $error');
+      }),
+    );
+    unawaited(
+      cancelReceive().catchError((Object error) {
+        debugPrint('Failed to cancel download: $error');
+      }),
+    );
     _logPollTimer?.cancel();
     _metricsTimer?.cancel();
     _logsScrollController.dispose();
@@ -260,8 +277,10 @@ class _DashboardPageState extends State<DashboardPage>
       }
 
       if (!mounted) return;
-      final selectedPath =
-          await FolderPickerModal.show(context, initialPath: _sendPath);
+      final selectedPath = await FolderPickerModal.show(
+        context,
+        initialPath: _sendPath,
+      );
       if (selectedPath != null && selectedPath.isNotEmpty) {
         if (selectedPath == '/' || selectedPath == '\\') {
           if (mounted) {
@@ -276,9 +295,9 @@ class _DashboardPageState extends State<DashboardPage>
           return;
         }
 
-      final stats = await StorageService.inspectFolder(selectedPath);
-      if (!mounted) return;
-      setState(() {
+        final stats = await StorageService.inspectFolder(selectedPath);
+        if (!mounted) return;
+        setState(() {
           _sendPath = selectedPath;
           _folderStats = stats;
           _sendError = null;
@@ -295,8 +314,10 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _pickDestFolder() async {
     try {
-      final selectedPath =
-          await FolderPickerModal.show(context, initialPath: _destController.text);
+      final selectedPath = await FolderPickerModal.show(
+        context,
+        initialPath: _destController.text,
+      );
       if (selectedPath != null && selectedPath.isNotEmpty) {
         if (selectedPath == '/' || selectedPath == '\\') {
           if (mounted) {
@@ -310,15 +331,16 @@ class _DashboardPageState extends State<DashboardPage>
           }
           return;
         }
+        if (!mounted) return;
         setState(() {
           _destController.text = selectedPath;
         });
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error picking folder: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error picking folder: $e')));
       }
     }
   }
@@ -362,6 +384,10 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _startSharing() async {
+    if (_isSending) return;
+    final generation = ++_sendGeneration;
+    final path = _sendPath;
+    var totalSize = BigInt.zero;
     if (_sendPath == null || _sendPath == '/' || _sendPath == '\\') {
       setState(() {
         _sendError =
@@ -381,69 +407,76 @@ class _DashboardPageState extends State<DashboardPage>
 
     try {
       final temp = await getTemporaryDirectory();
-      _sendSub =
-          startSend(path: _sendPath!, tempDir: temp.path).listen((progress) {
-        progress.when(
-          importing: (fileName, bytesDone, bytesTotal) {
-            setState(() {
-              _isImporting = true;
-              _sendStatus = 'Importing: $fileName';
-              _sendProgress = bytesTotal > BigInt.zero
-                  ? bytesDone.toDouble() / bytesTotal.toDouble()
-                  : 0.0;
-            });
-          },
-          importDone: (totalSize) {
-            setState(() {
-              _isImporting = false;
-              _sendStatus = 'Import complete. Sharing...';
-              _sendProgress = 1.0;
-            });
-          },
-          startingEndpoint: () {
-            setState(() {
-              _sendStatus = 'Starting Iroh node...';
-              _sendProgress = 0.0;
-            });
-          },
-          sharing: (ticket) {
-            setState(() {
-              _isSending = true;
-              _sendTicket = ticket;
-              _sendStatus = 'Active & Available';
-              _sendProgress = 1.0;
-            });
-            _addHistoryEntry(
-              TransferItem(
-                isSend: true,
-                path: _sendPath!,
-                ticket: ticket,
-                status: 'Sharing',
-                size: BigInt.zero,
-                timestamp: DateTime.now(),
-                files: [_sendPath!],
-              ),
-              dedupe: true,
-            );
-          },
-          failed: (error) {
-            setState(() {
-              _isSending = false;
-              _isImporting = false;
-              _sendError = error;
-              _sendStatus = 'Failed: $error';
-            });
-          },
-        );
-      }, onError: (e) {
-        setState(() {
-          _isSending = false;
-          _isImporting = false;
-          _sendError = e.toString();
-          _sendStatus = 'Error: $e';
-        });
-      });
+      if (!mounted || generation != _sendGeneration) return;
+      _sendSub = startSend(path: path!, tempDir: temp.path).listen(
+        (progress) {
+          if (!mounted || generation != _sendGeneration) return;
+          progress.when(
+            importing: (fileName, bytesDone, bytesTotal) {
+              setState(() {
+                _isImporting = true;
+                _sendStatus = 'Importing: $fileName';
+                _sendProgress = bytesTotal > BigInt.zero
+                    ? bytesDone.toDouble() / bytesTotal.toDouble()
+                    : 0.0;
+              });
+            },
+            importDone: (size) {
+              totalSize = size;
+              setState(() {
+                _isImporting = false;
+                _sendStatus = 'Import complete. Sharing...';
+                _sendProgress = 1.0;
+              });
+            },
+            startingEndpoint: () {
+              setState(() {
+                _sendStatus = 'Starting Iroh node...';
+                _sendProgress = 0.0;
+              });
+            },
+            sharing: (ticket) {
+              setState(() {
+                _isSending = true;
+                _sendTicket = ticket;
+                _sendStatus = 'Active & Available';
+                _sendProgress = 1.0;
+              });
+              _addHistoryEntry(
+                TransferItem(
+                  isSend: true,
+                  path: path,
+                  ticket: ticket,
+                  status: 'Sharing',
+                  size: totalSize,
+                  timestamp: DateTime.now(),
+                  files: [path],
+                ),
+                dedupe: true,
+              );
+            },
+            failed: (error) {
+              setState(() {
+                _isSending = false;
+                _isImporting = false;
+                _sendError = error;
+                _sendStatus = 'Failed: $error';
+              });
+            },
+          );
+        },
+        onError: (e) {
+          if (!mounted || generation != _sendGeneration) return;
+          setState(() {
+            _isSending = false;
+            _isImporting = false;
+            _sendError = e.toString();
+            _sendStatus = 'Error: $e';
+          });
+        },
+      );
     } catch (e) {
+      if (!mounted || generation != _sendGeneration) return;
       setState(() {
         _isSending = false;
         _isImporting = false;
@@ -454,17 +487,18 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _stopSharing() async {
-    await _historyLoad;
+    final generation = ++_sendGeneration;
     await _sendSub?.cancel();
     try {
       await stopSend();
     } catch (_) {}
 
+    await _historyLoad;
+    if (!mounted || generation != _sendGeneration) return;
     var historyUpdated = false;
     setState(() {
       if (_sendTicket != null) {
-        final index =
-            _history.indexWhere((item) => item.ticket == _sendTicket);
+        final index = _history.indexWhere((item) => item.ticket == _sendTicket);
         if (index != -1) {
           final old = _history[index];
           _history[index] = old.copyWith(status: 'Stopped');
@@ -507,6 +541,8 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _startDownloading() async {
+    if (_isReceiving) return;
+    final generation = ++_receiveGeneration;
     final ticketStr = _ticketController.text.trim();
     final dest = _destController.text.trim();
     if (ticketStr.isEmpty || dest.isEmpty) return;
@@ -534,108 +570,118 @@ class _DashboardPageState extends State<DashboardPage>
         await destDir.create(recursive: true);
       }
       final temp = await getTemporaryDirectory();
-      _receiveSub = startReceive(
-        ticketStr: ticketStr,
-        tempDir: temp.path,
-        destinationDir: dest,
-      ).listen((progress) {
-        progress.when(
-          connecting: () {
-            setState(() {
-              _receiveStatus = 'Connecting to peer...';
-            });
-          },
-          connected: () {
-            setState(() {
-              _receiveStatus = 'Connected. Handshaking...';
-            });
-          },
-          retrievingMetadata: () {
-            setState(() {
-              _receiveStatus = 'Retrieving metadata...';
-            });
-          },
-          downloading: (bytesDownloaded, totalBytes, percentage) {
-            final now = DateTime.now();
-            if (_lastSpeedCalcTime != null) {
-              final msDiff = now.difference(_lastSpeedCalcTime!).inMilliseconds;
-              if (msDiff >= 800) {
-                final bytesDiff = bytesDownloaded - _lastDownloadedBytes;
-                if (bytesDiff >= BigInt.zero && msDiff > 0) {
-                  final bytesPerSec =
-                      (bytesDiff.toDouble() / (msDiff / 1000.0));
-                  final mbPerSec = bytesPerSec / (1024.0 * 1024.0);
-                  _receiveSpeed = '${mbPerSec.toStringAsFixed(1)} MB/s';
-                }
-                _lastSpeedCalcTime = now;
-                _lastDownloadedBytes = bytesDownloaded;
-              }
-            }
+      if (!mounted || generation != _receiveGeneration) return;
+      _receiveSub =
+          startReceive(
+            ticketStr: ticketStr,
+            tempDir: temp.path,
+            destinationDir: dest,
+          ).listen(
+            (progress) {
+              if (!mounted || generation != _receiveGeneration) return;
+              progress.when(
+                connecting: () {
+                  setState(() {
+                    _receiveStatus = 'Connecting to peer...';
+                  });
+                },
+                connected: () {
+                  setState(() {
+                    _receiveStatus = 'Connected. Handshaking...';
+                  });
+                },
+                retrievingMetadata: () {
+                  setState(() {
+                    _receiveStatus = 'Retrieving metadata...';
+                  });
+                },
+                downloading: (bytesDownloaded, totalBytes, percentage) {
+                  final now = DateTime.now();
+                  if (_lastSpeedCalcTime != null) {
+                    final msDiff = now
+                        .difference(_lastSpeedCalcTime!)
+                        .inMilliseconds;
+                    if (msDiff >= 800) {
+                      final bytesDiff = bytesDownloaded - _lastDownloadedBytes;
+                      if (bytesDiff >= BigInt.zero && msDiff > 0) {
+                        final bytesPerSec =
+                            (bytesDiff.toDouble() / (msDiff / 1000.0));
+                        final mbPerSec = bytesPerSec / (1024.0 * 1024.0);
+                        _receiveSpeed = '${mbPerSec.toStringAsFixed(1)} MB/s';
+                      }
+                      _lastSpeedCalcTime = now;
+                      _lastDownloadedBytes = bytesDownloaded;
+                    }
+                  }
 
-            setState(() {
-              _receiveStatus =
-                  'Downloading: ${StorageService.formatBytes(bytesDownloaded)} / ${StorageService.formatBytes(totalBytes)}';
-              _receiveProgress = percentage / 100.0;
-            });
-          },
-          downloadDone: (totalBytes) {
-            setState(() {
-              _receiveStatus = 'Download complete. Exporting...';
-              _receiveProgress = 1.0;
-              _receiveSpeed = null;
-            });
-          },
-          exporting: (fileName, bytesExported, bytesTotal) {
-            setState(() {
-              _receiveStatus = 'Exporting: $fileName';
-              _receiveProgress = bytesTotal > BigInt.zero
-                  ? bytesExported.toDouble() / bytesTotal.toDouble()
-                  : 0.0;
-            });
-          },
-          finished: (totalFiles, totalBytes, exportedPaths) {
-            _stopMetricsTimer();
-            if (exportedPaths.isNotEmpty) {
-              StorageService.scanFiles(exportedPaths);
-            }
-            setState(() {
-              _isReceiving = false;
-              _receiveStatus = 'Success! Saved to $dest';
-              _receiveProgress = 1.0;
-              _receiveSpeed = null;
-            });
-            _addHistoryEntry(
-              TransferItem(
-                isSend: false,
-                path: dest,
-                ticket: ticketStr,
-                status: 'Completed',
-                size: totalBytes,
-                timestamp: DateTime.now(),
-                files: exportedPaths,
-              ),
-            );
-          },
-          failed: (error) {
-            _stopMetricsTimer();
-            setState(() {
-              _isReceiving = false;
-              _receiveError = error;
-              _receiveStatus = 'Failed: $error';
-              _receiveSpeed = null;
-            });
-          },
-        );
-      }, onError: (e) {
-        _stopMetricsTimer();
-        setState(() {
-          _isReceiving = false;
-          _receiveError = e.toString();
-          _receiveStatus = 'Error: $e';
-          _receiveSpeed = null;
-        });
-      });
+                  setState(() {
+                    _receiveStatus =
+                        'Downloading: ${StorageService.formatBytes(bytesDownloaded)} / ${StorageService.formatBytes(totalBytes)}';
+                    _receiveProgress = percentage / 100.0;
+                  });
+                },
+                downloadDone: (totalBytes) {
+                  setState(() {
+                    _receiveStatus = 'Download complete. Exporting...';
+                    _receiveProgress = 1.0;
+                    _receiveSpeed = null;
+                  });
+                },
+                exporting: (fileName, bytesExported, bytesTotal) {
+                  setState(() {
+                    _receiveStatus = 'Exporting: $fileName';
+                    _receiveProgress = bytesTotal > BigInt.zero
+                        ? bytesExported.toDouble() / bytesTotal.toDouble()
+                        : 0.0;
+                  });
+                },
+                finished: (totalFiles, totalBytes, exportedPaths) {
+                  _stopMetricsTimer();
+                  if (exportedPaths.isNotEmpty) {
+                    StorageService.scanFiles(exportedPaths);
+                  }
+                  setState(() {
+                    _isReceiving = false;
+                    _receiveStatus = 'Success! Saved to $dest';
+                    _receiveProgress = 1.0;
+                    _receiveSpeed = null;
+                  });
+                  _addHistoryEntry(
+                    TransferItem(
+                      isSend: false,
+                      path: dest,
+                      ticket: ticketStr,
+                      status: 'Completed',
+                      size: totalBytes,
+                      timestamp: DateTime.now(),
+                      files: exportedPaths,
+                    ),
+                  );
+                },
+                failed: (error) {
+                  _stopMetricsTimer();
+                  setState(() {
+                    _isReceiving = false;
+                    _receiveError = error;
+                    _receiveStatus = 'Failed: $error';
+                    _receiveSpeed = null;
+                  });
+                },
+              );
+            },
+            onError: (e) {
+              if (!mounted || generation != _receiveGeneration) return;
+              _stopMetricsTimer();
+              setState(() {
+                _isReceiving = false;
+                _receiveError = e.toString();
+                _receiveStatus = 'Error: $e';
+                _receiveSpeed = null;
+              });
+            },
+          );
     } catch (e) {
+      if (!mounted || generation != _receiveGeneration) return;
       _stopMetricsTimer();
       setState(() {
         _isReceiving = false;
@@ -647,12 +693,14 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _cancelDownloading() async {
+    final generation = ++_receiveGeneration;
     _stopMetricsTimer();
     await _receiveSub?.cancel();
     try {
       await cancelReceive();
     } catch (_) {}
 
+    if (!mounted || generation != _receiveGeneration) return;
     setState(() {
       _isReceiving = false;
       _receiveStatus = 'Cancelled';
@@ -755,12 +803,15 @@ class _DashboardPageState extends State<DashboardPage>
                       history: _history,
                       onClearHistory: () async {
                         await _historyLoad;
+                        if (!mounted) return;
                         setState(() => _history.clear());
                         _persistHistory();
                       },
                       onDeleteItem: (index) async {
+                        final item = _history[index];
                         await _historyLoad;
-                        setState(() => _history.removeAt(index));
+                        if (!mounted) return;
+                        setState(() => _history.remove(item));
                         _persistHistory();
                       },
                     ),
@@ -926,10 +977,14 @@ class _DashboardPageState extends State<DashboardPage>
         ),
         labelColor: Colors.white,
         unselectedLabelColor: Colors.grey[500],
-        labelStyle:
-            GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13),
-        unselectedLabelStyle:
-            GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13),
+        labelStyle: GoogleFonts.inter(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+        ),
+        unselectedLabelStyle: GoogleFonts.inter(
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
         indicatorSize: TabBarIndicatorSize.tab,
         dividerColor: Colors.transparent,
         tabs: const [
