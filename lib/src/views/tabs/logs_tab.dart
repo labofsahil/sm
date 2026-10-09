@@ -26,6 +26,7 @@ class _LogsTabState extends State<LogsTab> {
   LogLevelFilter _selectedLevel = LogLevelFilter.all;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  bool _autoScroll = true;
 
   @override
   void initState() {
@@ -117,6 +118,21 @@ class _LogsTabState extends State<LogsTab> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _autoScroll = !_autoScroll;
+                      });
+                    },
+                    icon: Icon(
+                      _autoScroll
+                          ? Icons.vertical_align_bottom_rounded
+                          : Icons.pause_circle_outline_rounded,
+                      size: 18,
+                      color: _autoScroll ? AppTheme.emeraldAccentColor : Colors.grey,
+                    ),
+                    tooltip: _autoScroll ? 'Auto-scroll Enabled' : 'Auto-scroll Paused',
+                  ),
                   TextButton.icon(
                     onPressed: widget.logs.isEmpty ? null : widget.onCopyLogs,
                     icon: const Icon(Icons.copy_rounded, size: 15),

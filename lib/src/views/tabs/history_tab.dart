@@ -80,7 +80,7 @@ class _HistoryTabState extends State<HistoryTab> {
               const Spacer(),
               if (widget.history.isNotEmpty && widget.onClearHistory != null)
                 IconButton(
-                  onPressed: widget.onClearHistory,
+                  onPressed: () => _confirmClearHistory(context),
                   icon: const Icon(Icons.delete_sweep_rounded, size: 20),
                   color: Colors.grey[500],
                   tooltip: 'Clear History',
@@ -339,6 +339,48 @@ class _HistoryTabState extends State<HistoryTab> {
         ),
       ],
     );
+  }
+
+  Future<void> _confirmClearHistory(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: Text(
+          'Clear History?',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to clear all transfer history? This action cannot be undone.',
+          style: GoogleFonts.inter(
+            color: Colors.grey[300],
+            fontSize: 13,
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.errorColor,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Clear All'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && widget.onClearHistory != null) {
+      widget.onClearHistory!();
+    }
   }
 
   Widget _buildFilterChip(String label, HistoryFilter filter, int count) {
