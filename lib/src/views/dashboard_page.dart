@@ -206,13 +206,11 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _pickSendFile() async {
     try {
-      final result = await FilePicker.pickFiles();
-      if (result != null &&
-          result.files.isNotEmpty &&
-          result.files.first.path != null &&
-          mounted) {
+      final file = await FilePicker.pickFile();
+      final path = file?.path;
+      if (path != null && mounted) {
         setState(() {
-          _sendPath = result.files.first.path;
+          _sendPath = path;
           _folderStats = null;
           _sendError = null;
         });

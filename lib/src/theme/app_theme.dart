@@ -50,7 +50,10 @@ class AppTheme {
   );
 
   static ThemeData get darkTheme {
-    return ThemeData.dark().copyWith(
+    final baseTheme = ThemeData.dark();
+    final textTheme = baseTheme.textTheme;
+
+    return baseTheme.copyWith(
       scaffoldBackgroundColor: background,
       colorScheme: const ColorScheme.dark(
         primary: primary,
@@ -58,11 +61,26 @@ class AppTheme {
         surface: surface,
         error: errorColor,
       ),
-      textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
-      dividerTheme: const DividerThemeData(
-        color: border,
-        thickness: 1,
+      // Apply shared TextStyle values without crossing the Flutter/material_ui
+      // TextTheme boundary used by newer Google Fonts releases.
+      textTheme: textTheme.copyWith(
+        displayLarge: GoogleFonts.inter(textStyle: textTheme.displayLarge),
+        displayMedium: GoogleFonts.inter(textStyle: textTheme.displayMedium),
+        displaySmall: GoogleFonts.inter(textStyle: textTheme.displaySmall),
+        headlineLarge: GoogleFonts.inter(textStyle: textTheme.headlineLarge),
+        headlineMedium: GoogleFonts.inter(textStyle: textTheme.headlineMedium),
+        headlineSmall: GoogleFonts.inter(textStyle: textTheme.headlineSmall),
+        titleLarge: GoogleFonts.inter(textStyle: textTheme.titleLarge),
+        titleMedium: GoogleFonts.inter(textStyle: textTheme.titleMedium),
+        titleSmall: GoogleFonts.inter(textStyle: textTheme.titleSmall),
+        bodyLarge: GoogleFonts.inter(textStyle: textTheme.bodyLarge),
+        bodyMedium: GoogleFonts.inter(textStyle: textTheme.bodyMedium),
+        bodySmall: GoogleFonts.inter(textStyle: textTheme.bodySmall),
+        labelLarge: GoogleFonts.inter(textStyle: textTheme.labelLarge),
+        labelMedium: GoogleFonts.inter(textStyle: textTheme.labelMedium),
+        labelSmall: GoogleFonts.inter(textStyle: textTheme.labelSmall),
       ),
+      dividerTheme: const DividerThemeData(color: border, thickness: 1),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: surfaceElevated,
         contentTextStyle: GoogleFonts.inter(color: Colors.white, fontSize: 13),
