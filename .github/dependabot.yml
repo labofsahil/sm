@@ -9,6 +9,15 @@ updates:
         patterns:
           - "*"
 
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "weekly"
+    groups:
+      all-android:
+        patterns:
+          - "*"
+
   - package-ecosystem: "pub"
     directory: "/rust_builder"
     schedule:
